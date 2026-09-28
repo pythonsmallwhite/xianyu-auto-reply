@@ -20,6 +20,8 @@ from common.models.xy_account import XYAccount
 from common.services.item_service import ItemService
 from common.services.publish_address_service import PublishAddressService
 from common.services.publish_log_service import PublishLogService
+from common.services.publish_capacity_service import reserve_publish_capacity, settle_publish_capacity
+from common.utils.publish_outcome import classify_publish_result
 from common.services.promotion_xianyu_publish_service import publish_single_item
 
 
@@ -150,6 +152,15 @@ async def execute_single_publish(
         **resolved_address.to_log_fields(),
     )
 
+    try:
+        capacity_state = await reserve_publish_capacity(user_id, account_id, log.id)
+    except Exception as capacity_exc:
+        await log_svc.update_log(log.id, "failed", error_message=f"发布容量预留失败: {capacity_exc}")
+        return {"success": False, "message": f"发布容量预留失败: {capacity_exc}", "log_id": log.id}
+    if capacity_state == "exhausted":
+        await log_svc.update_log(log.id, "skipped", error_message="账号剩余可发布数量不足")
+        return {"success": False, "skipped": True, "message": "账号剩余可发布数量不足，已跳过", "log_id": log.id}
+
     result = None
     pub_error = None
     try:
@@ -169,32 +180,34 @@ async def execute_single_publish(
 
     from common.db.session import async_session_maker
 
+    outcome = classify_publish_result(result, request_started=True, raised=pub_error is not None)
+    response = result if isinstance(result, dict) else {}
     try:
         async with async_session_maker() as fresh_session:
             fresh_log_svc = PublishLogService(fresh_session)
-            if pub_error:
-                await fresh_log_svc.update_log(
-                    log_id=log.id,
-                    status="failed",
-                    error_message=str(pub_error),
-                )
-                return {"success": False, "message": f"发布异常: {str(pub_error)}", "log_id": log.id}
-
-            status = "success" if result.get("success") else "failed"
             await fresh_log_svc.update_log(
                 log_id=log.id,
-                status=status,
-                item_url=result.get("item_url"),
-                item_id=result.get("item_id"),
-                error_message=None if result.get("success") else result.get("message"),
+                status=outcome,
+                item_url=response.get("item_url"),
+                item_id=response.get("item_id"),
+                error_message=("发布请求结果未知，请先对账" if outcome == "unknown" else
+                               (str(pub_error) if pub_error else response.get("message") if outcome == "failed" else None)),
+            )
+            await settle_publish_capacity(
+                log.id, outcome, item_id=response.get("item_id"),
+                error_message=str(pub_error) if pub_error else response.get("message") if outcome != "success" else None,
             )
     except Exception as db_err:
-        logger.error(f"更新发布日志失败: {db_err}")
+        logger.error(f"更新发布日志或容量结算失败: {db_err}")
+        return {"success": False, "unknown": True, "message": "发布结果保存失败，请先人工对账", "log_id": log.id}
 
+    if outcome == "unknown":
+        return {"success": False, "unknown": True, "message": "发布请求结果未知，请先对账", "item_id": response.get("item_id"), "log_id": log.id}
     if pub_error:
         return {"success": False, "message": f"发布异常: {str(pub_error)}", "log_id": log.id}
 
-    publish_success = result.get("success", False)
+    result = response
+    publish_success = outcome == "success"
     sync_info = {
         "sync_status": "skipped",
         "sync_message": "发布未成功，未触发自动获取商品",

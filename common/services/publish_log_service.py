@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from loguru import logger
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -92,7 +93,21 @@ class PublishLogService:
                 log.item_id = item_id
             if error_message is not None:
                 log.error_message = str(error_message)[:1000]
+            owner_id = log.user_id
+            should_bind = status == "success" and bool(log.item_id) and log.material_id is not None
             await self.session.commit()
+            if should_bind:
+                from common.services.internal_product_service import InternalProductService
+
+                try:
+                    await InternalProductService(self.session).bind_successful_publish_log(
+                        owner_id=owner_id,
+                        publish_log_id=log_id,
+                    )
+                except Exception:
+                    # 发布结果已经确认；关联失败不能变成可重试的发布失败。
+                    await self.session.rollback()
+                    logger.exception(f"发布日志 {log_id} 已成功，内部商品关联失败，请补关联")
 
     async def list_logs(
         self,

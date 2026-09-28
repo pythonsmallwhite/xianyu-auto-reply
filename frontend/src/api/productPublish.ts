@@ -265,7 +265,7 @@ export interface PublishLog {
   price?: string
   material_id?: number | null
   batch_id?: string | null
-  status: 'pending' | 'publishing' | 'success' | 'failed'
+  status: 'pending' | 'publishing' | 'success' | 'failed' | 'unknown' | 'skipped'
   item_url?: string | null
   item_id?: string | null
   error_message?: string | null
@@ -293,6 +293,8 @@ export interface BatchAccountStatus {
   total: number
   success: number
   failed: number
+  unknown: number
+  skipped: number
   publishing: number
   pending: number
   sync_status: 'pending' | 'running' | 'success' | 'failed' | 'skipped' | 'unknown'
@@ -309,14 +311,18 @@ export interface BatchStatusResponse {
     total: number
     success: number
     failed: number
+    unknown: number
+    skipped: number
     publishing: number
     pending: number
     finished: boolean
+    snapshot_available: boolean
     account_statuses: BatchAccountStatus[]
   }
 }
 
 export interface PublishSingleResponseData {
+  unknown?: boolean
   item_url?: string | null
   item_id?: string | null
   log_id?: number

@@ -720,6 +720,7 @@ async def publish_single(
             "item_url": result.get("item_url"),
             "item_id": result.get("item_id"),
             "log_id": result.get("log_id"),
+            "unknown": bool(result.get("unknown")),
             "sync_status": result.get("sync_status"),
             "sync_message": result.get("sync_message"),
             "sync_total_count": result.get("sync_total_count"),
@@ -814,6 +815,8 @@ async def get_batch_status(
     total = sum(counts.values())
     success = counts.get("success", 0)
     failed = counts.get("failed", 0)
+    unknown = counts.get("unknown", 0)
+    skipped = counts.get("skipped", 0)
     publishing = counts.get("publishing", 0)
     pending = counts.get("pending", 0)
     batch_snapshot = await PublishBatchStatusService.get_batch_snapshot(batch_id)
@@ -821,7 +824,6 @@ async def get_batch_status(
     if batch_snapshot is None:
         if total == 0:
             return ApiResponse(success=False, message="批量任务不存在或状态已失效")
-        return ApiResponse(success=False, message="批量任务状态已失效，请到发布日志查看执行结果")
 
     account_statuses: List[Dict[str, Any]] = []
     if batch_snapshot:
@@ -831,7 +833,7 @@ async def get_batch_status(
         expected_total = material_count * len(account_order)
         if expected_total > total:
             total = expected_total
-            pending = max(total - success - failed - publishing, 0)
+            pending = max(total - success - failed - unknown - skipped - publishing, 0)
 
         for account_id in account_order:
             status_map = account_count_map.get(account_id, {})
@@ -839,7 +841,9 @@ async def get_batch_status(
             account_success = int(status_map.get("success", 0))
             account_failed = int(status_map.get("failed", 0))
             account_publishing = int(status_map.get("publishing", 0))
-            account_pending = max(account_total - account_success - account_failed - account_publishing, 0)
+            account_unknown = int(status_map.get("unknown", 0))
+            account_skipped = int(status_map.get("skipped", 0))
+            account_pending = max(account_total - account_success - account_failed - account_unknown - account_skipped - account_publishing, 0)
             sync_info = account_sync_map.get(account_id, {})
             account_statuses.append(
                 {
@@ -847,6 +851,8 @@ async def get_batch_status(
                     "total": account_total,
                     "success": account_success,
                     "failed": account_failed,
+                    "unknown": account_unknown,
+                    "skipped": account_skipped,
                     "publishing": account_publishing,
                     "pending": account_pending,
                     "sync_status": sync_info.get("sync_status", "pending"),
@@ -862,6 +868,8 @@ async def get_batch_status(
             account_total = sum(status_map.values())
             account_success = int(status_map.get("success", 0))
             account_failed = int(status_map.get("failed", 0))
+            account_unknown = int(status_map.get("unknown", 0))
+            account_skipped = int(status_map.get("skipped", 0))
             account_publishing = int(status_map.get("publishing", 0))
             account_pending = int(status_map.get("pending", 0))
             account_statuses.append(
@@ -870,8 +878,28 @@ async def get_batch_status(
                     "total": account_total,
                     "success": account_success,
                     "failed": account_failed,
+                    "unknown": account_unknown,
+                    "skipped": account_skipped,
                     "publishing": account_publishing,
                     "pending": account_pending,
+                    "sync_status": "unknown",
+                    "sync_message": unknown_sync_message,
+                    "sync_total_count": 0,
+                    "sync_saved_count": 0,
+                }
+            )
+    else:
+        for account_id, status_map in account_count_map.items():
+            account_statuses.append(
+                {
+                    "account_id": account_id,
+                    "total": sum(status_map.values()),
+                    "success": int(status_map.get("success", 0)),
+                    "failed": int(status_map.get("failed", 0)),
+                    "unknown": int(status_map.get("unknown", 0)),
+                    "skipped": int(status_map.get("skipped", 0)),
+                    "publishing": int(status_map.get("publishing", 0)),
+                    "pending": int(status_map.get("pending", 0)),
                     "sync_status": "unknown",
                     "sync_message": unknown_sync_message,
                     "sync_total_count": 0,
@@ -885,15 +913,18 @@ async def get_batch_status(
 
     return ApiResponse(
         success=True,
-        message="查询成功",
+        message="查询成功" if batch_snapshot is not None else "仅恢复已有发布日志，无法确认批次是否完成",
         data={
             "batch_id": batch_id,
             "total": total,
             "success": success,
             "failed": failed,
+            "unknown": unknown,
+            "skipped": skipped,
             "publishing": publishing,
             "pending": pending,
-            "finished": total > 0 and (publishing + pending) == 0 and sync_finished,
+            "finished": batch_snapshot is not None and total > 0 and (publishing + pending) == 0 and sync_finished,
+            "snapshot_available": batch_snapshot is not None,
             "account_statuses": account_statuses,
         },
     )

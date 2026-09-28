@@ -24,6 +24,7 @@ from loguru import logger
 from common.models.xy_order import XYOrder
 from common.models.xy_catalog_item import XYCatalogItem
 from common.models.auto_reply_message_log import XYAutoReplyMessageLog
+from common.utils.inventory_policy import inventory_event_for_status
 
 
 # 复用的 goofish API 连接池（TCPConnector）
@@ -65,6 +66,29 @@ class OrderService:
 
     def __init__(self, session: AsyncSession):
         self.session = session
+
+    async def _sync_inventory_event(
+        self, order: XYOrder, previous_status: str | None = None,
+    ) -> None:
+        """与订单同事务记账；计划可由 reconcile_plan 重建，不发送平台请求。"""
+        status = (order.status or "").lower()
+        if previous_status in {"refunding", "refunded", "refund_closed"}:
+            status = previous_status
+        event = inventory_event_for_status(status, previous_status)
+        if event is None or not order.account_id or not order.item_id:
+            return
+        from common.services.internal_product_service import InternalProductService
+
+        await InternalProductService(self.session).apply_order_event(
+            owner_id=order.owner_id,
+            account_id=order.account_id,
+            item_id=order.item_id,
+            order_no=order.order_no,
+            event=event,
+            quantity=order.quantity if order.quantity is not None else 1,
+            commit=False,
+            sync_quantity=True,
+        )
 
     async def _get_item_titles(self, owner_id: int | None, item_ids: list[str]) -> Dict[str, str]:
         """批量获取商品标题
@@ -370,14 +394,15 @@ class OrderService:
     async def update_order_status(self, order_no: str, status: str) -> bool:
         """更新订单状态"""
         try:
-            stmt = (
-                update(XYOrder)
-                .where(XYOrder.order_no == order_no)
-                .values(status=status)
-            )
-            result = await self.session.execute(stmt)
+            orders = (await self.session.execute(
+                select(XYOrder).where(XYOrder.order_no == order_no).with_for_update()
+            )).scalars().all()
+            for order in orders:
+                previous_status = order.status
+                order.status = status
+                await self._sync_inventory_event(order, previous_status)
             await self.session.commit()
-            return result.rowcount > 0
+            return bool(orders)
         except Exception as e:
             logger.error(f"更新订单状态失败: {e}")
             await self.session.rollback()
@@ -719,10 +744,12 @@ class OrderService:
                 if chat_id and not existing_order.chat_id:
                     update_values['chat_id'] = chat_id
                 
+                previous_status = existing_order.status
+                for field, value in update_values.items():
+                    setattr(existing_order, field, value)
+                await self._sync_inventory_event(existing_order, previous_status)
+                await self.session.commit()
                 if update_values:
-                    update_stmt = update(XYOrder).where(XYOrder.order_no == order_no).values(**update_values)
-                    await self.session.execute(update_stmt)
-                    await self.session.commit()
                     logger.info(f"订单 {order_no} 已存在，更新字段: {update_values}")
                 else:
                     logger.info(f"订单 {order_no} 已存在，无需更新")
@@ -745,6 +772,8 @@ class OrderService:
                 placed_at=now_beijing,
             )
             self.session.add(new_order)
+            await self.session.flush()
+            await self._sync_inventory_event(new_order)
             await self.session.commit()
             logger.info(f"订单 {order_no} 创建成功")
             return True

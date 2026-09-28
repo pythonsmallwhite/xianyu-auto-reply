@@ -56,3 +56,76 @@ export async function uploadProductImages(uris: string[]): Promise<UploadedImage
 
   return unwrapData<UploadedImages>(data);
 }
+
+export interface PublishMaterialOption {
+  id: number;
+  user_id: number;
+  title: string;
+  price: number;
+  images: string[];
+}
+
+export interface PublishMaterialPage {
+  list: PublishMaterialOption[];
+  total: number;
+}
+
+export interface BatchAccountStatus {
+  account_id: string;
+  total: number;
+  success: number;
+  failed: number;
+  unknown: number;
+  skipped: number;
+  publishing: number;
+  pending: number;
+  sync_status: 'pending' | 'running' | 'success' | 'failed' | 'skipped' | 'unknown';
+  sync_message: string;
+}
+
+export class PublishBatchUnavailableError extends Error {}
+
+export interface BatchPublishProgress {
+  batch_id: string;
+  total: number;
+  success: number;
+  failed: number;
+  unknown: number;
+  skipped: number;
+  publishing: number;
+  pending: number;
+  finished: boolean;
+  snapshot_available: boolean;
+  account_statuses: BatchAccountStatus[];
+}
+
+export async function getPublishMaterials(page: number, pageSize = 100): Promise<PublishMaterialPage> {
+  const client = await getApiClient();
+  const { data } = (await (client.GET as any)(PREFIX + '/materials', {
+    params: { query: { page, page_size: pageSize } },
+  })) as { data?: unknown };
+  const result = unwrapData<PublishMaterialPage>(data);
+  if (!result || !Array.isArray(result.list)) throw new Error('素材列表响应无效');
+  return result;
+}
+
+export async function publishBatch(accountIds: string[], materialIds: number[]): Promise<{ batch_id: string; total: number }> {
+  const client = await getApiClient();
+  const { data } = (await (client.POST as any)(PREFIX + '/publish/batch', {
+    body: { account_ids: accountIds, material_ids: materialIds },
+  })) as { data?: unknown };
+  const result = unwrapData<{ batch_id: string; total: number }>(data);
+  if (!result?.batch_id) throw new Error('批量发布响应缺少任务 ID');
+  return result;
+}
+
+export async function getBatchPublishProgress(batchId: string): Promise<BatchPublishProgress> {
+  const client = await getApiClient();
+  const { data } = (await (client.GET as any)(PREFIX + '/publish/batch/' + encodeURIComponent(batchId) + '/status')) as { data?: unknown };
+  if (data && typeof data === 'object' && (data as { success?: unknown }).success === false) {
+    throw new PublishBatchUnavailableError((data as { message?: string }).message || '批量任务状态已失效');
+  }
+  const result = unwrapData<BatchPublishProgress>(data);
+  if (!result?.batch_id) throw new Error('批量发布状态响应无效');
+  return result;
+}

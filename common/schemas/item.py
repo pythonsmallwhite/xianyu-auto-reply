@@ -19,6 +19,7 @@ class ItemBatchOfflineRequest(BaseModel):
 
     cookie_id: str
     item_ids: list[str]
+    confirm_history: bool = False
 
 
 class ItemReplyUpdate(BaseModel):

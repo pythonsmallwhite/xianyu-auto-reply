@@ -33,7 +33,7 @@ class PublishLog(TimestampMixin, Base):
     batch_id: Mapped[str | None] = mapped_column(String(36), index=True, comment="批次ID（批量发布任务标识）")
     publish_request_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True, comment="发布幂等请求号")
     source_event_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True, comment="来源自动续售事件ID")
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", comment="状态：pending/publishing/success/failed")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", comment="状态：pending/publishing/success/failed/unknown")
     item_url: Mapped[str | None] = mapped_column(String(500), comment="发布成功后的商品链接")
     item_id: Mapped[str | None] = mapped_column(String(64), comment="发布成功后的商品ID")
     error_message: Mapped[str | None] = mapped_column(String(1000), comment="失败原因")

@@ -22,6 +22,8 @@ from app.services.publish_batch_status_service import PublishBatchStatusService
 from app.services.item_service import ItemService
 from common.models.publish_log import PublishLog
 from common.models.xy_account import XYAccount
+from common.services.publish_capacity_service import reserve_publish_capacity, settle_publish_capacity
+from common.utils.publish_outcome import classify_publish_result
 from common.services.publish_execution_service import (
     SYNC_AFTER_PUBLISH_DELAY_SECONDS,
     execute_single_publish,
@@ -254,6 +256,8 @@ class PublishExecutorService:
         total = len(account_ids) * len(materials)
         success_count = 0
         failed_count = 0
+        unknown_count = 0
+        skipped_count = 0
         log_ids: List[int] = []
 
         logger.info(f"批量发布开始: batch_id={batch_id}, 账号数={len(account_ids)}, 商品数={len(materials)}")
@@ -373,10 +377,28 @@ class PublishExecutorService:
                     **resolved_address.to_log_fields(),
                 )
                 log_ids.append(log.id)
+                try:
+                    capacity_state = await reserve_publish_capacity(user_id, account_id, log.id)
+                except Exception as capacity_exc:
+                    failed_count += 1
+                    await log_svc.update_log(
+                        log_id=log.id, status="failed",
+                        error_message=f"发布容量预留失败: {capacity_exc}",
+                    )
+                    continue
+                if capacity_state == "exhausted":
+                    skipped_count += 1
+                    await log_svc.update_log(
+                        log_id=log.id, status="skipped",
+                        error_message="账号剩余可发布数量不足",
+                    )
+                    continue
 
+                publish_call_started = False
                 try:
                     if is_fish_shop:
                         # 鱼小铺账号继续走原有发布器，参数和接口逻辑均保持不变。
+                        publish_call_started = True
                         result = await publish_single_item(
                             item_data=publish_material,
                             cookie=cookies_str,
@@ -385,6 +407,7 @@ class PublishExecutorService:
                             static_root=STATIC_ROOT,
                         )
                     else:
+                        publish_call_started = True
                         result = await publish_personal_single_item(
                             item_data=publish_material,
                             cookie=cookies_str,
@@ -395,30 +418,56 @@ class PublishExecutorService:
                     cookies_str = result.get("cookies_str") or cookies_str
                     account.cookie = cookies_str
 
-                    if result.get("success"):
-                        success_count += 1
-                        account_success_count += 1
+                    outcome = classify_publish_result(
+                        result, request_started=publish_call_started
+                    )
+                    if outcome == "success":
                         await log_svc.update_log(
                             log_id=log.id,
                             status="success",
                             item_url=result.get("item_url"),
                             item_id=result.get("item_id"),
                         )
+                        await settle_publish_capacity(log.id, "success", item_id=result.get("item_id"))
+                        success_count += 1
+                        account_success_count += 1
+                    elif outcome == "unknown":
+                        await log_svc.update_log(
+                            log_id=log.id,
+                            status="unknown",
+                            item_url=result.get("item_url"),
+                            item_id=result.get("item_id"),
+                            error_message="发布请求结果未知，请先对账",
+                        )
+                        await settle_publish_capacity(log.id, "unknown", item_id=result.get("item_id"))
+                        unknown_count += 1
                     else:
-                        failed_count += 1
                         await log_svc.update_log(
                             log_id=log.id,
                             status="failed",
                             error_message=result.get("message"),
                         )
+                        await settle_publish_capacity(log.id, "failed", error_message=result.get("message"))
+                        failed_count += 1
 
                     if idx < len(materials) - 1:
                         await asyncio.sleep(3)
 
                 except Exception as exc:
-                    failed_count += 1
+                    outcome = classify_publish_result(
+                        None, request_started=publish_call_started, raised=True
+                    )
+                    if outcome == "unknown":
+                        unknown_count += 1
+                    else:
+                        failed_count += 1
                     logger.error(f"批量接口发布单品异常: account={account_id}, title={material.get('title')}: {exc}")
-                    await log_svc.update_log(log_id=log.id, status="failed", error_message=str(exc))
+                    await log_svc.update_log(
+                        log_id=log.id,
+                        status=outcome,
+                        error_message="发布请求结果未知，请先对账" if outcome == "unknown" else str(exc),
+                    )
+                    await settle_publish_capacity(log.id, outcome, error_message=str(exc))
 
             if account_success_count > 0 and account is not None:
                 try:
@@ -451,7 +500,7 @@ class PublishExecutorService:
                     message="该账号没有发布成功的商品，未触发自动获取商品",
                 )
 
-        logger.info(f"批量发布结束: batch_id={batch_id}, 成功={success_count}, 失败={failed_count}")
+        logger.info(f"批量发布结束: batch_id={batch_id}, 成功={success_count}, 失败={failed_count}, 跳过={skipped_count}, 未知={unknown_count}")
 
         return {
             "success": True,
@@ -459,6 +508,8 @@ class PublishExecutorService:
             "total": total,
             "success_count": success_count,
             "failed_count": failed_count,
+            "unknown_count": unknown_count,
+            "skipped_count": skipped_count,
             "log_ids": log_ids,
         }
 

@@ -38,6 +38,7 @@ export interface ItemFilterParams {
   is_polished?: boolean | null      // 是否擦亮
   is_multi_spec?: boolean | null    // 多规格
   multi_quantity_delivery?: boolean | null  // 多数量发货
+  show_history?: boolean  // 显式显示历史或来源待确认商品
 }
 
 // 获取商品列表（分页）
@@ -75,6 +76,7 @@ export const getItemsPaginated = async (
     if (filters.multi_quantity_delivery !== null && filters.multi_quantity_delivery !== undefined) {
       params.append('multi_quantity_delivery', String(filters.multi_quantity_delivery))
     }
+    if (filters.show_history) params.append('show_history', 'true')
   }
   
   const result = await get<{
@@ -127,8 +129,8 @@ export const batchDeleteItems = (ids: { cookie_id: string; item_id: string }[]):
 }
 
 // 批量下架商品（调用闲鱼接口，使用所选账号的Cookie）
-export const batchOfflineItems = (cookieId: string, itemIds: string[]): Promise<ApiResponse> => {
-  return post(`${ITEM_PREFIX}/batch-offline`, { cookie_id: cookieId, item_ids: itemIds })
+export const batchOfflineItems = (cookieId: string, itemIds: string[], confirmHistory = false): Promise<ApiResponse> => {
+  return post(`${ITEM_PREFIX}/batch-offline`, { cookie_id: cookieId, item_ids: itemIds, confirm_history: confirmHistory })
 }
 
 // 批量删除闲鱼平台商品（本地商品记录保留）

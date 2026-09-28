@@ -66,6 +66,8 @@ export interface Account {
   delivery_disabled_excluded_item_ids?: string[]
   note?: string
   remark?: string
+  remaining_publish_capacity?: number | null
+  reserved_publish_count?: number
   pause_duration?: number
   username?: string
   login_password?: string
@@ -124,6 +126,7 @@ export interface Item {
   id: string | number
   cookie_id: string
   item_id: string
+  source_category?: 'managed' | 'tool_published_unlinked' | 'history_or_unknown'
   title?: string
   item_title?: string
   desc?: string

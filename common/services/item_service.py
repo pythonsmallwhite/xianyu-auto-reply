@@ -24,6 +24,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from common.db.redis_client import distributed_lock
 from common.models.xy_account import XYAccount
 from common.models.xy_catalog_item import XYCatalogItem
+from common.utils.item_origin import origin_predicates, origin_name
 from common.models.default_reply import DefaultReply
 from common.models.card import Card
 
@@ -168,30 +169,38 @@ class ItemService:
         """
         return set((await self._get_existing_item_map(account, item_ids)).keys())
 
-    async def list_items(self, owner_id: int | None, account_id: str | None = None) -> list[dict]:
+    async def list_items(self, owner_id: int | None, account_id: str | None = None, show_history: bool = False) -> list[dict]:
         """获取商品列表
         
         Args:
             owner_id: 用户ID，None表示查询所有用户（管理员）
             account_id: 账号ID（可选）
         """
+        from sqlalchemy import or_
+        managed, tool_published = origin_predicates()
         stmt = (
-            select(XYCatalogItem, XYAccount.account_id)
+            select(XYCatalogItem, XYAccount.account_id, managed, tool_published)
             .outerjoin(XYAccount, XYCatalogItem.account_pk == XYAccount.id)
             .order_by(XYCatalogItem.created_at.desc())
         )
+        if not show_history:
+            stmt = stmt.where(or_(managed, tool_published))
         if owner_id is not None:
             stmt = stmt.where(XYCatalogItem.owner_id == owner_id)
         if account_id:
             stmt = stmt.where(XYAccount.account_id == account_id)
         rows = await self.session.execute(stmt)
-        items_data = rows.all()
-        
-        # 批量查询所有商品的默认回复状态和卡券状态
+        source_rows = rows.all()
+        items_data = [(item, acct_id) for item, acct_id, _, _ in source_rows]
+
         default_reply_map = await self._get_default_reply_status_batch(items_data)
         card_set = await self._get_card_status_batch(items_data)
-        
-        return [self._serialize_item(item, acct_id, default_reply_map.get((acct_id, item.item_id)), item.item_id in card_set) for item, acct_id in items_data]
+        items = []
+        for item, acct_id, is_managed, is_tool_published in source_rows:
+            record = self._serialize_item(item, acct_id, default_reply_map.get((acct_id, item.item_id)), item.item_id in card_set)
+            record["source_category"] = origin_name(bool(is_managed), bool(is_tool_published))
+            items.append(record)
+        return items
 
     async def list_items_paginated(
         self,
@@ -203,6 +212,7 @@ class ItemService:
         is_polished: bool | None = None,
         is_multi_spec: bool | None = None,
         multi_quantity_delivery: bool | None = None,
+        show_history: bool = False,
     ) -> tuple[list[dict], int]:
         """获取商品列表（分页），支持多条件筛选
         
@@ -221,12 +231,15 @@ class ItemService:
         """
         from sqlalchemy import String, and_, cast, func, or_
         
+        managed, tool_published = origin_predicates()
         base_stmt = (
-            select(XYCatalogItem, XYAccount.account_id)
+            select(XYCatalogItem, XYAccount.account_id, managed, tool_published)
             .outerjoin(XYAccount, XYCatalogItem.account_pk == XYAccount.id)
         )
-        
+
         conditions = []
+        if not show_history:
+            conditions.append(or_(managed, tool_published))
         if owner_id is not None:
             conditions.append(XYCatalogItem.owner_id == owner_id)
         if account_id:
@@ -278,10 +291,12 @@ class ItemService:
         if conditions:
             base_stmt = base_stmt.where(and_(*conditions))
         
-        # 查询总数：仅在按账号筛选时才需要 JOIN 账号表，否则直接基于商品表统计，避免无谓 JOIN
-        count_stmt = select(func.count(XYCatalogItem.id)).select_from(XYCatalogItem)
-        if account_id:
-            count_stmt = count_stmt.outerjoin(XYAccount, XYCatalogItem.account_pk == XYAccount.id)
+        # 来源匹配依赖账号标识；即使未按账号筛选也必须 JOIN 账号表。
+        count_stmt = (
+            select(func.count(XYCatalogItem.id))
+            .select_from(XYCatalogItem)
+            .outerjoin(XYAccount, XYCatalogItem.account_pk == XYAccount.id)
+        )
         if conditions:
             count_stmt = count_stmt.where(and_(*conditions))
         total_result = await self.session.execute(count_stmt)
@@ -291,13 +306,16 @@ class ItemService:
         offset = (page - 1) * page_size
         stmt = base_stmt.order_by(XYCatalogItem.created_at.desc()).offset(offset).limit(page_size)
         rows = await self.session.execute(stmt)
-        items_data = rows.all()
-        
-        # 批量查询所有商品的默认回复状态和卡券状态
+        source_rows = rows.all()
+        items_data = [(item, acct_id) for item, acct_id, _, _ in source_rows]
+
         default_reply_map = await self._get_default_reply_status_batch(items_data)
         card_set = await self._get_card_status_batch(items_data)
-        
-        items = [self._serialize_item(item, acct_id, default_reply_map.get((acct_id, item.item_id)), item.item_id in card_set) for item, acct_id in items_data]
+        items = []
+        for item, acct_id, is_managed, is_tool_published in source_rows:
+            record = self._serialize_item(item, acct_id, default_reply_map.get((acct_id, item.item_id)), item.item_id in card_set)
+            record["source_category"] = origin_name(bool(is_managed), bool(is_tool_published))
+            items.append(record)
         return items, total
 
     async def fetch_items_page_from_account(

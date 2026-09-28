@@ -36,6 +36,8 @@ class AccountService:
             XYAccount.remark,
             XYAccount.status,
             XYAccount.show_browser,
+            XYAccount.remaining_publish_capacity,
+            XYAccount.reserved_publish_count,
         ).order_by(XYAccount.account_id)
         if owner_id is not None:
             stmt = stmt.where(XYAccount.owner_id == owner_id)
@@ -47,6 +49,8 @@ class AccountService:
                 "remark": row.remark or "",
                 "enabled": (row.status or "active").strip().lower() not in {"inactive", "disabled", "suspended", "deleted"},
                 "show_browser": bool(row.show_browser),
+                "remaining_publish_capacity": row.remaining_publish_capacity,
+                "reserved_publish_count": row.reserved_publish_count or 0,
             }
             for row in result.all()
         ]
@@ -392,6 +396,20 @@ class AccountService:
         account.auto_confirm = auto_confirm
         if auto_confirm:
             account.only_send_card = False
+
+    async def update_publish_capacity(self, account: XYAccount, remaining: int) -> bool:
+        """Set the observed remaining allowance without releasing in-flight holds."""
+        result = await self.session.execute(
+            update(XYAccount)
+            .where(XYAccount.id == account.id, XYAccount.reserved_publish_count <= remaining)
+            .values(remaining_publish_capacity=remaining)
+        )
+        if result.rowcount != 1:
+            await self.session.rollback()
+            return False
+        await self.session.commit()
+        await self.session.refresh(account)
+        return True
 
     async def update_pause_duration(self, account: XYAccount, duration: int) -> None:
         account.pause_duration = duration

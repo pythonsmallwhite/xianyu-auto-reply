@@ -33,6 +33,8 @@ from common.schemas.account import (
     AccountLoginInfoUpdate,
     AccountMessageExpireTimeUpdate,
     AccountPauseDurationUpdate,
+    AccountPublishCapacityUpdate,
+    AccountPublishCapacityResolution,
     AccountRemarkUpdate,
     AccountReplyDelayUpdate,
     AccountScheduledRedeliveryUpdate,
@@ -45,6 +47,11 @@ from common.schemas.account import (
 from common.schemas.common import ApiResponse
 from common.services.ai_provider_service import read_ai_enabled
 from common.services.token_renewal_cache_service import delete_token_cache
+from common.services.publish_capacity_service import (
+    PublishCapacityError,
+    list_open_publish_reservations,
+    resolve_unknown_publish_reservation,
+)
 from common.utils.auth_scope import resolve_owner_scope
 from common.utils.xianyu_utils import close_account_notice
 from app.services.account_service import AccountService
@@ -221,6 +228,8 @@ async def list_cookie_details(
                 show_browser=bool(account.show_browser),
                 disable_reason=account.disable_reason or "",
                 filter_count=filter_counts.get(account.account_id, 0),
+                remaining_publish_capacity=account.remaining_publish_capacity,
+                reserved_publish_count=account.reserved_publish_count or 0,
             )
         )
     return details
@@ -367,6 +376,8 @@ async def list_cookie_details_paginated(
             "show_browser": bool(account.show_browser),
             "disable_reason": account.disable_reason or "",
             "filter_count": filter_counts.get(account.account_id, 0),
+            "remaining_publish_capacity": account.remaining_publish_capacity,
+            "reserved_publish_count": account.reserved_publish_count or 0,
             "today_reply_count": today_reply_counts.get(account.account_id, 0),
             "keyword_count": keyword_counts.get(account.id, 0),
             "ai_enabled": read_ai_enabled(ai_settings),
@@ -682,6 +693,59 @@ async def update_account_remark(
     account = await _get_account_or_404(current_user, account_id, account_service)
     await account_service.update_remark(account, payload.remark)
     return ApiResponse(success=True, message="备注已更新")
+
+
+@router.put("/{account_id}/publish-capacity", response_model=ApiResponse)
+async def update_account_publish_capacity(
+    account_id: str,
+    payload: AccountPublishCapacityUpdate,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+) -> ApiResponse:
+    account = await _get_account_or_404(current_user, account_id, account_service)
+    if not await account_service.update_publish_capacity(account, payload.remaining_publish_capacity):
+        raise HTTPException(status_code=409, detail="填写的剩余数量小于正在发布或待对账的预留数量")
+    return ApiResponse(
+        success=True,
+        message="剩余可发布数量已更新",
+        data={
+            "remaining_publish_capacity": account.remaining_publish_capacity,
+            "reserved_publish_count": account.reserved_publish_count,
+            "available_publish_capacity": account.remaining_publish_capacity - account.reserved_publish_count,
+        },
+    )
+
+
+@router.get("/{account_id}/publish-capacity/reservations", response_model=ApiResponse)
+async def list_account_publish_capacity_reservations(
+    account_id: str,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+) -> ApiResponse:
+    account = await _get_account_or_404(current_user, account_id, account_service)
+    rows = await list_open_publish_reservations(account.owner_id, account.account_id)
+    return ApiResponse(success=True, data=rows)
+
+
+@router.post("/{account_id}/publish-capacity/reservations/{reservation_id}/resolve", response_model=ApiResponse)
+async def resolve_account_publish_capacity_reservation(
+    account_id: str,
+    reservation_id: str,
+    payload: AccountPublishCapacityResolution,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+) -> ApiResponse:
+    account = await _get_account_or_404(current_user, account_id, account_service)
+    try:
+        result = await resolve_unknown_publish_reservation(
+            account.owner_id, account.account_id, reservation_id,
+            payload.outcome, payload.item_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PublishCapacityError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ApiResponse(success=True, message="发布结果已对账", data=result)
 
 
 @router.put("/{account_id}/auto-confirm", response_model=ApiResponse)

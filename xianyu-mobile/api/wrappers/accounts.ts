@@ -79,6 +79,7 @@ export async function getQrLoginCookie(sessionId: string): Promise<void> {
 export interface AccountDetail {
   pk: number;
   id: string;
+  owner_id?: number;
   enabled: boolean;
   remark?: string;
   online?: boolean;

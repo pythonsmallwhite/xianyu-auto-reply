@@ -8,6 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from common.models.user import User
+from common.models.xy_catalog_item import XYCatalogItem
+from common.models.internal_product import InternalProductListing
+from common.models.publish_log import PublishLog
+from common.services.internal_product_service import InternalProductService
 from common.schemas.common import ApiResponse
 from common.utils.auth_scope import resolve_owner_scope
 from common.utils.default_reply_api import validate_api_url, normalize_api_timeout
@@ -94,12 +98,13 @@ async def _execute_batch_item_operation(
 
 @items_router.get("")
 async def list_items(
+    show_history: bool = Query(default=False, description="显式显示历史或来源待确认商品"),
     current_user: User = Depends(deps.get_current_active_user),
     item_service: ItemService = Depends(deps.get_item_service),
 ) -> Dict[str, List[dict]]:
     """获取商品列表，管理员可查看所有商品"""
     owner_id, _ = resolve_owner_scope(current_user)
-    items = await item_service.list_items(owner_id)
+    items = await item_service.list_items(owner_id, show_history=show_history)
     return {"items": items}
 
 
@@ -112,6 +117,7 @@ async def list_items_paginated(
     is_polished: bool | None = Query(default=None, description="是否擦亮筛选"),
     is_multi_spec: bool | None = Query(default=None, description="多规格筛选"),
     multi_quantity_delivery: bool | None = Query(default=None, description="多数量发货筛选"),
+    show_history: bool = Query(default=False, description="显式显示历史或来源待确认商品"),
     current_user: User = Depends(deps.get_current_active_user),
     item_service: ItemService = Depends(deps.get_item_service),
 ):
@@ -135,6 +141,7 @@ async def list_items_paginated(
         is_polished=is_polished,
         is_multi_spec=is_multi_spec,
         multi_quantity_delivery=multi_quantity_delivery,
+        show_history=show_history,
     )
     
     return {
@@ -187,6 +194,7 @@ async def list_items_by_card(
 @items_router.get("/cookie/{cookie_id}")
 async def list_items_by_cookie(
     cookie_id: str,
+    show_history: bool = Query(default=False, description="显式显示历史或来源待确认商品"),
     current_user: User = Depends(deps.get_current_active_user),
     account_service: AccountService = Depends(deps.get_account_service),
     item_service: ItemService = Depends(deps.get_item_service),
@@ -202,7 +210,7 @@ async def list_items_by_cookie(
     if not account:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="账号不存在")
 
-    items = await item_service.list_items(owner_id, cookie_id)
+    items = await item_service.list_items(owner_id, cookie_id, show_history=show_history)
     return {"items": items}
 
 
@@ -1044,6 +1052,7 @@ async def batch_offline_items(
     payload: ItemBatchOfflineRequest,
     current_user: User = Depends(deps.get_current_active_user),
     account_service: AccountService = Depends(deps.get_account_service),
+    session: AsyncSession = Depends(deps.get_db_session),
 ) -> ApiResponse:
     """批量下架商品（调用闲鱼接口，使用所选账号的Cookie）
 
@@ -1062,9 +1071,52 @@ async def batch_offline_items(
     if not account.cookie:
         return ApiResponse(success=False, message="该账号未登录（Cookie为空），无法下架")
 
+    item_ids = list(dict.fromkeys(payload.item_ids))
+    known_ids = set((await session.execute(
+        select(XYCatalogItem.item_id).where(
+            XYCatalogItem.owner_id == account.owner_id,
+            XYCatalogItem.account_pk == account.id,
+            XYCatalogItem.item_id.in_(item_ids),
+        )
+    )).scalars().all())
+    if known_ids != set(item_ids):
+        raise HTTPException(status_code=400, detail="仅允许下架当前账号已获取的商品")
+    linked_rows = (await session.execute(
+        select(InternalProductListing.item_id, InternalProductListing.internal_product_id).where(
+            InternalProductListing.owner_id == account.owner_id,
+            InternalProductListing.account_id == account.account_id,
+            InternalProductListing.item_id.in_(item_ids),
+        )
+    )).all()
+    linked_products = {row.item_id: row.internal_product_id for row in linked_rows}
+    if len(item_ids) > 1 and (
+        len(linked_products) != len(item_ids) or len(set(linked_products.values())) != 1
+    ):
+        raise HTTPException(status_code=400, detail="批量下架仅允许同一内部商品的关联项；历史或未关联商品须单件下架")
+    if len(item_ids) == 1 and item_ids[0] not in linked_products:
+        tool_published = (await session.execute(
+            select(PublishLog.id).where(
+                PublishLog.user_id == account.owner_id,
+                PublishLog.account_id == account.account_id,
+                PublishLog.item_id == item_ids[0],
+                PublishLog.status == "success",
+            ).limit(1)
+        )).scalar_one_or_none() is not None
+        if not tool_published and not payload.confirm_history:
+            raise HTTPException(status_code=400, detail="历史或来源待确认商品必须经单件下架确认")
+
     result = await batch_offline_items_from_xianyu(
-        account.account_id, account.cookie, payload.item_ids
+        account.account_id, account.cookie, item_ids
     )
+    internal_products = InternalProductService(session)
+    for entry in result.get("results") or []:
+        if entry.get("success") and entry.get("item_id") in linked_products:
+            try:
+                await internal_products.mark_manual_offline(
+                    account.owner_id, account.account_id, str(entry["item_id"])
+                )
+            except Exception as exc:
+                logger.error("记录人工下架状态失败: account=%s item=%s error=%s", account.account_id, entry.get("item_id"), exc)
     suc_count = result.get("suc_count", 0)
     fail_count = result.get("fail_count", 0)
     logger.info(

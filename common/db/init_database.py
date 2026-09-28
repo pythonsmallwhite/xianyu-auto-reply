@@ -557,6 +557,8 @@ class DatabaseInitializer:
                 username VARCHAR(120) COMMENT '登录用户名',
                 login_password TEXT COMMENT '登录密码',
                 remark VARCHAR(255) COMMENT '备注',
+                remaining_publish_capacity INT DEFAULT NULL COMMENT '用户填写的剩余可发布数量',
+                reserved_publish_count INT NOT NULL DEFAULT 0 COMMENT '未结算发布预留数量',
                 pause_duration INT DEFAULT 10 COMMENT '暂停时长(分钟)',
                 auto_confirm TINYINT(1) DEFAULT 0 COMMENT '自动确认发货',
                 show_browser TINYINT(1) DEFAULT 0 COMMENT '显示浏览器',
@@ -1604,7 +1606,7 @@ class DatabaseInitializer:
                 price VARCHAR(20) DEFAULT NULL COMMENT '发布价格',
                 material_id BIGINT DEFAULT NULL COMMENT '关联的素材ID（批量发布时使用）',
                 batch_id VARCHAR(36) DEFAULT NULL COMMENT '批次ID（批量发布任务标识）',
-                status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT '状态：pending/publishing/success/failed',
+                status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT '状态：pending/publishing/success/failed/unknown',
                 item_url VARCHAR(500) DEFAULT NULL COMMENT '发布成功后的商品链接',
                 item_id VARCHAR(64) DEFAULT NULL COMMENT '发布成功后的商品ID',
                 error_message VARCHAR(1000) DEFAULT NULL COMMENT '失败原因',
@@ -1954,6 +1956,71 @@ class DatabaseInitializer:
                 INDEX idx_alti_task_status (task_id, status)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI铺货任务明细表';
         """,
+        "xy_internal_products": """
+            CREATE TABLE IF NOT EXISTS xy_internal_products (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                owner_id BIGINT NOT NULL,
+                title VARCHAR(200) NOT NULL,
+                material_id BIGINT DEFAULT NULL,
+                total_stock INT DEFAULT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uk_internal_product_material (owner_id, material_id),
+                INDEX idx_internal_product_owner (owner_id),
+                CONSTRAINT ck_internal_product_stock CHECK (total_stock IS NULL OR total_stock >= 0)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='内部共享库存商品';
+        """,
+        "xy_internal_product_listings": """
+            CREATE TABLE IF NOT EXISTS xy_internal_product_listings (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                owner_id BIGINT NOT NULL,
+                internal_product_id BIGINT NOT NULL,
+                account_id VARCHAR(80) NOT NULL,
+                item_id VARCHAR(64) NOT NULL,
+                publish_log_id BIGINT NOT NULL,
+                state VARCHAR(20) NOT NULL DEFAULT 'active',
+                offline_reason VARCHAR(20) DEFAULT NULL,
+                pending_action VARCHAR(20) DEFAULT NULL,
+                state_version INT NOT NULL DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uk_internal_listing_platform (owner_id, account_id, item_id),
+                UNIQUE KEY uk_internal_listing_publish_log (publish_log_id),
+                INDEX idx_internal_listing_product (internal_product_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='内部商品账号平台映射';
+        """,
+        "xy_inventory_order_holds": """
+            CREATE TABLE IF NOT EXISTS xy_inventory_order_holds (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                owner_id BIGINT NOT NULL,
+                internal_product_id BIGINT NOT NULL,
+                listing_id BIGINT NOT NULL,
+                account_id VARCHAR(80) NOT NULL,
+                order_no VARCHAR(64) NOT NULL,
+                quantity INT NOT NULL DEFAULT 1,
+                status VARCHAR(20) NOT NULL DEFAULT 'reserved',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uk_inventory_order_account (owner_id, account_id, order_no),
+                INDEX idx_inventory_hold_product_status (internal_product_id, status)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='内部共享库存订单占用';
+        """,
+        "xy_publish_capacity_reservations": """
+            CREATE TABLE IF NOT EXISTS xy_publish_capacity_reservations (
+                id VARCHAR(36) PRIMARY KEY,
+                owner_id BIGINT NOT NULL,
+                account_id VARCHAR(80) NOT NULL,
+                publish_log_id BIGINT NOT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'reserved',
+                item_id VARCHAR(64) DEFAULT NULL,
+                error_message VARCHAR(500) DEFAULT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uk_publish_capacity_log (publish_log_id),
+                INDEX idx_publish_capacity_owner_account (owner_id, account_id),
+                INDEX idx_publish_capacity_status (status)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='发布容量预留账本';
+        """,
     }
     
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]
@@ -2050,6 +2117,8 @@ class DatabaseInitializer:
             ("call_user", "VARCHAR(128) DEFAULT NULL COMMENT '调用用户：仅远程调用记录(按秘钥查到的用户名)'", "call_type"),
         ],
         "xy_accounts": [
+            ("remaining_publish_capacity", "INT DEFAULT NULL COMMENT '用户填写的剩余可发布数量'", "remark"),
+            ("reserved_publish_count", "INT NOT NULL DEFAULT 0 COMMENT '未结算发布预留数量'", "remaining_publish_capacity"),
             ("proxy_type", "VARCHAR(20) DEFAULT 'none' COMMENT '代理类型'", "last_refresh_at"),
             ("proxy_host", "VARCHAR(255) COMMENT '代理主机'", "proxy_type"),
             ("proxy_port", "INT COMMENT '代理端口'", "proxy_host"),

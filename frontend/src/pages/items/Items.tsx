@@ -33,6 +33,7 @@ export function Items() {
   const [items, setItems] = useState<Item[]>([])
   const [accounts, setAccounts] = useState<Account[]>([])
   const [selectedAccount, setSelectedAccount] = useState('')
+  const [showHistory, setShowHistory] = useState(false)
   const [searchKeyword, setSearchKeyword] = useState('')
   const [selectedIds, setSelectedIds] = useState<Set<string | number>>(new Set())
   const [fetchingType, setFetchingType] = useState<'single' | 'all' | null>(null)
@@ -131,6 +132,7 @@ export function Items() {
   const [deleteItemConfirm, setDeleteItemConfirm] = useState<{ open: boolean; item: Item | null }>({ open: false, item: null })
   const [batchDeleteItemConfirm, setBatchDeleteItemConfirm] = useState(false)
   const [batchOfflineConfirm, setBatchOfflineConfirm] = useState(false)
+  const [singleOfflineItem, setSingleOfflineItem] = useState<Item | null>(null)
   const [batchXianyuDeleteConfirm, setBatchXianyuDeleteConfirm] = useState(false)
   const [offlining, setOfflining] = useState(false)
   const [deletingFromXianyu, setDeletingFromXianyu] = useState(false)
@@ -159,6 +161,7 @@ export function Items() {
       const result = await getItemsPaginated(page, pageSize, selectedAccount || undefined, {
         ...currentFilters,
         keyword: trimmedKeyword || null,
+        show_history: showHistory,
       })
       if (result.success) {
         const nextItems = result.data || []
@@ -296,7 +299,7 @@ export function Items() {
   useEffect(() => {
     if (!_hasHydrated || !isAuthenticated || !token) return
     loadItems(1, pagination.pageSize, filters)
-  }, [_hasHydrated, isAuthenticated, token, selectedAccount])
+  }, [_hasHydrated, isAuthenticated, token, selectedAccount, showHistory])
 
   // 搜索关键词变更时自动触发查询（已改为手动点击查询按钮）
   // useEffect(() => {
@@ -395,7 +398,28 @@ export function Items() {
       addToast({ type: 'warning', message: '请先在顶部「筛选账号」选择具体账号后再下架' })
       return
     }
+    const selected = items.filter(item => selectedIds.has(item.id))
+    if (selected.length > 1 && selected.some(item => item.source_category !== 'managed')) {
+      addToast({ type: 'warning', message: '历史或未关联商品只能单件下架' })
+      return
+    }
     setBatchOfflineConfirm(true)
+  }
+
+  const handleSingleOffline = async () => {
+    if (!singleOfflineItem) return
+    setOfflining(true)
+    try {
+      const result = await batchOfflineItems(singleOfflineItem.cookie_id, [singleOfflineItem.item_id], true)
+      if (!result.success) throw new Error(result.message || '下架失败')
+      addToast({ type: 'success', message: result.message || '下架成功' })
+      setSingleOfflineItem(null)
+      await loadItems()
+    } catch (error) {
+      addToast({ type: 'error', message: error instanceof Error ? error.message : '下架失败' })
+    } finally {
+      setOfflining(false)
+    }
   }
 
   // 执行批量下架（调用闲鱼接口，使用所选账号的Cookie）
@@ -1397,6 +1421,15 @@ export function Items() {
                 placeholder="所有账号"
               />
             </div>
+            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 pb-2">
+              <input type="checkbox" checked={showHistory} onChange={(event) => {
+                const enabled = event.target.checked
+                setShowHistory(enabled)
+                setPagination(previous => ({ ...previous, page: 1 }))
+                setSelectedIds(new Set())
+              }} />
+              显示历史/来源待确认商品
+            </label>
             <div className="input-group min-w-[240px] flex-1">
               <label className="input-label">搜索商品</label>
               <div className="relative">
@@ -1570,6 +1603,9 @@ export function Items() {
                       >
                         {item.item_title || item.title || '-'}
                       </div>
+                      <span className={`text-xs ${item.source_category === 'managed' ? 'text-emerald-600' : item.source_category === 'tool_published_unlinked' ? 'text-blue-600' : 'text-amber-600'}`}>
+                        {item.source_category === 'managed' ? '已关联内部商品' : item.source_category === 'tool_published_unlinked' ? '工具发布 · 未关联' : '历史/来源待确认'}
+                      </span>
                     </td>
                     <td className="text-amber-600 font-medium">
                       {item.item_price || (item.price ? `¥${item.price}` : '-')}
@@ -1687,6 +1723,11 @@ export function Items() {
                     </td>
                     <td className="sticky right-0 bg-white dark:bg-slate-900">
                       <div className="flex gap-1">
+                        {item.source_category === 'history_or_unknown' && item.cookie_id && <button
+                          onClick={() => setSingleOfflineItem(item)}
+                          className="table-action-btn hover:!bg-amber-50"
+                          title="仅下架当前账号此商品"
+                        ><PackageX className="w-4 h-4 text-amber-500" /></button>}
                         <button
                           onClick={() => {
                             if (!item.is_seller_item) return handleEdit(item)
@@ -2914,6 +2955,18 @@ export function Items() {
         loading={deleting}
         onConfirm={handleBatchDelete}
         onCancel={() => setBatchDeleteItemConfirm(false)}
+      />
+
+      <ConfirmModal
+        isOpen={singleOfflineItem !== null}
+        title="历史商品单件下架确认"
+        message={singleOfflineItem ? `只下架账号「${singleOfflineItem.cookie_id}」的商品「${singleOfflineItem.item_title || singleOfflineItem.title || singleOfflineItem.item_id}」（ID：${singleOfflineItem.item_id}），不影响其他账号或内部商品。确认执行吗？` : ''}
+        confirmText="下架此商品"
+        cancelText="取消"
+        type="danger"
+        loading={offlining}
+        onConfirm={handleSingleOffline}
+        onCancel={() => setSingleOfflineItem(null)}
       />
 
       {/* 批量下架确认弹窗 */}

@@ -21,6 +21,8 @@ const STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
   publishing: { label: '发布中', cls: 'badge-warning' },
   success:    { label: '成功',   cls: 'badge-success' },
   failed:     { label: '失败',   cls: 'badge-danger' },
+  unknown:    { label: '结果未知，待对账', cls: 'badge-warning' },
+  skipped:    { label: '额度不足，已跳过', cls: 'badge-secondary' },
 }
 
 const ADDRESS_SOURCE_CONFIG: Record<string, { label: string; cls: string }> = {

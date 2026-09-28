@@ -39,6 +39,8 @@ class XYAccount(TimestampMixin, Base):
     username: Mapped[str | None] = mapped_column(String(120), comment="登录用户名")
     login_password: Mapped[str | None] = mapped_column(Text, comment="登录密码")
     remark: Mapped[str | None] = mapped_column(String(255), comment="备注")
+    remaining_publish_capacity: Mapped[int | None] = mapped_column(Integer, comment="用户填写的剩余可发布数量")
+    reserved_publish_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="未结算发布预留数量")
     pause_duration: Mapped[int] = mapped_column(Integer, default=10, comment="暂停时长(分钟)")
     auto_confirm: Mapped[bool] = mapped_column(Boolean, default=False, comment="自动确认发货")
     show_browser: Mapped[bool] = mapped_column(Boolean, default=False, comment="显示浏览器")

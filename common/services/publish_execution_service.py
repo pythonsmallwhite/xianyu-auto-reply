@@ -19,9 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.db.session import async_session_maker
 from common.models.xy_account import XYAccount
+from common.utils.publish_outcome import classify_publish_result
 from common.services.item_service import ItemService
 from common.services.publish_address_service import PublishAddressService
 from common.services.publish_log_service import PublishLogService
+from common.services.publish_capacity_service import reserve_publish_capacity, settle_publish_capacity
 from common.services.xianyu_publish_service import (
     detect_publish_account_capability,
     ensure_publish_capability_reliable,
@@ -110,7 +112,7 @@ async def execute_single_publish(
     log_svc = PublishLogService(session)
     address_svc = PublishAddressService(session)
 
-    # 只有自动续售发布才启用幂等与未知结果对账保护。
+    # 自动续售发布启用幂等日志保护；所有发布都会区分明确失败与未知结果。
     # 手工单品发布必须优先执行，不得被自动续售历史状态拦截。
     is_auto_relist_publish = source_event_id is not None
     existing_log = None
@@ -229,6 +231,17 @@ async def execute_single_publish(
                     }
             raise
 
+    # Reserve before the first platform request. A skipped item must not stop
+    # other accounts or materials in the batch.
+    try:
+        capacity_state = await reserve_publish_capacity(user_id, account_id, log.id)
+    except Exception as capacity_exc:
+        await log_svc.update_log(log.id, "failed", error_message=f"发布容量预留失败: {capacity_exc}")
+        return {"success": False, "message": f"发布容量预留失败: {capacity_exc}", "log_id": log.id}
+    if capacity_state == "exhausted":
+        await log_svc.update_log(log.id, "skipped", error_message="账号剩余可发布数量不足")
+        return {"success": False, "skipped": True, "message": "账号剩余可发布数量不足，已跳过", "log_id": log.id}
+
     result = None
     pub_error = None
     publish_unknown = False
@@ -281,18 +294,22 @@ async def execute_single_publish(
         if refreshed_cookies and refreshed_cookies != account.cookie:
             account.cookie = refreshed_cookies
             refreshed_cookie = refreshed_cookies
-        publish_unknown = is_auto_relist_publish and publish_call_started and bool(
-            result and (result.get("unknown") or result.get("_request_status_unknown"))
-        )
+        publish_unknown = classify_publish_result(
+            result, request_started=publish_call_started
+        ) == "unknown"
     except Exception as exc:
         pub_error = exc
         # 一旦进入平台发布调用，异常无法证明平台未产生副作用；即使异常类型
-        # 不是常见网络错误，也必须进入人工对账，避免自动续售重复上架。
-        publish_unknown = is_auto_relist_publish and publish_call_started
+        # 不是常见网络错误，也必须进入人工对账，避免重复上架。
+        publish_unknown = classify_publish_result(
+            result, request_started=publish_call_started, raised=True
+        ) == "unknown"
         logger.error(f"单品发布异常: {exc}")
 
     if not isinstance(result, dict):
-        publish_unknown = is_auto_relist_publish and publish_call_started
+        publish_unknown = classify_publish_result(
+            result, request_started=publish_call_started
+        ) == "unknown"
         result = {"success": False, "message": "发布接口未返回有效结果"}
 
     # 手动发布失败或商品列表没有发生变化时，后续流程可能不会提交调用方会话；
@@ -321,9 +338,10 @@ async def execute_single_publish(
             if pub_error:
                 await fresh_log_svc.update_log(
                     log_id=log.id,
-                    status="publishing" if publish_unknown else "failed",
+                    status="unknown" if publish_unknown else "failed",
                     error_message="发布请求已提交，结果未知，请先对账" if publish_unknown else str(pub_error),
                 )
+                await settle_publish_capacity(log.id, "unknown" if publish_unknown else "failed", error_message=str(pub_error))
                 return {
                     "success": False,
                     "unknown": publish_unknown,
@@ -334,46 +352,22 @@ async def execute_single_publish(
             if publish_unknown:
                 await fresh_log_svc.update_log(
                     log_id=log.id,
-                    status="publishing",
+                    status="unknown",
+                    item_id=result.get("item_id"),
+                    item_url=result.get("item_url"),
                     error_message="发布请求结果未知，请先对账",
                 )
+                await settle_publish_capacity(log.id, "unknown", item_id=result.get("item_id"))
                 return {
                     "success": False,
                     "unknown": True,
-                    "message": result.get("message") or "发布请求结果未知，请先对账",
+                    "message": "发布请求结果未知，请先对账",
                     "item_id": result.get("item_id"),
                     "item_url": result.get("item_url"),
                     "log_id": log.id,
                 }
             publish_success = bool(result.get("success"))
             result_item_id = str(result.get("item_id") or "").strip()
-
-            # 自动续售必须拿到平台商品 ID 才能继续本地迁移和切换监听商品。
-            # 平台返回成功但缺少 ID（或返回失败却带有 ID）都无法证明副作用状态，
-            # 统一保留为未知结果，禁止后续再次调用发布接口。
-            ambiguous_result = is_auto_relist_publish and bool(publish_request_id) and (
-                (publish_success and not result_item_id)
-                or (not publish_success and bool(result_item_id))
-            )
-            if ambiguous_result:
-                reconcile_message = (
-                    "发布接口返回成功但未返回商品 ID，请先对账"
-                    if publish_success
-                    else "发布接口返回失败但包含商品 ID，请先对账"
-                )
-                await fresh_log_svc.update_log(
-                    log_id=log.id,
-                    status="publishing",
-                    item_id=result_item_id or None,
-                    error_message=reconcile_message,
-                )
-                return {
-                    "success": False,
-                    "unknown": True,
-                    "message": reconcile_message,
-                    "item_id": result_item_id or None,
-                    "log_id": log.id,
-                }
 
             status = "success" if publish_success else "failed"
             await fresh_log_svc.update_log(
@@ -383,11 +377,14 @@ async def execute_single_publish(
                 item_id=result_item_id or None,
                 error_message=None if publish_success else result.get("message"),
             )
+            await settle_publish_capacity(
+                log.id, status, item_id=result_item_id or None,
+                error_message=None if publish_success else result.get("message"),
+            )
     except Exception as db_err:
         logger.error(f"更新发布日志失败: {db_err}")
-        if is_auto_relist_publish and publish_request_id:
-            # 外部平台结果已返回，但本地日志状态无法确认，自动续售不得把它当作
-            # 可安全重试的明确失败，否则可能重复上架。
+        if publish_call_started:
+            # 平台调用已开始，但本地日志状态无法确认；必须先人工对账。
             return {
                 "success": False,
                 "unknown": True,

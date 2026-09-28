@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
+from typing import Literal
 
 
 class AccountDetail(BaseModel):
@@ -44,6 +45,8 @@ class AccountDetail(BaseModel):
     show_browser: bool = False
     disable_reason: str | None = None
     filter_count: int = 0  # 消息过滤规则数量
+    remaining_publish_capacity: int | None = None
+    reserved_publish_count: int = 0
 
 
 class AccountOption(BaseModel):
@@ -54,6 +57,8 @@ class AccountOption(BaseModel):
     remark: str | None = None
     enabled: bool = True
     show_browser: bool = False
+    remaining_publish_capacity: int | None = None
+    reserved_publish_count: int = 0
 
 
 class AccountCreate(BaseModel):
@@ -84,6 +89,15 @@ class AccountRemarkUpdate(BaseModel):
 
 class AccountAutoConfirmUpdate(BaseModel):
     auto_confirm: bool
+
+
+class AccountPublishCapacityUpdate(BaseModel):
+    remaining_publish_capacity: int = Field(..., ge=0, description="当前账号剩余可发布数量")
+
+
+class AccountPublishCapacityResolution(BaseModel):
+    outcome: Literal["success", "failed"]
+    item_id: str | None = Field(None, max_length=64)
 
 
 class AccountPauseDurationUpdate(BaseModel):

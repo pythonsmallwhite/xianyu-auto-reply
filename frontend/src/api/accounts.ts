@@ -15,6 +15,8 @@ export const getAccountDetails = async (): Promise<AccountDetail[]> => {
     enabled: boolean
     remark?: string
     show_browser?: boolean
+    remaining_publish_capacity?: number | null
+    reserved_publish_count?: number
   }
   const data = await get<BackendAccountOption[]>(`${COOKIE_PREFIX}/options`)
   return data.map((item) => ({
@@ -25,6 +27,8 @@ export const getAccountDetails = async (): Promise<AccountDetail[]> => {
     auto_confirm: false,
     note: item.remark,
     show_browser: item.show_browser,
+    remaining_publish_capacity: item.remaining_publish_capacity ?? null,
+    reserved_publish_count: item.reserved_publish_count ?? 0,
     use_ai_reply: false,
     use_default_reply: false,
   }))
@@ -87,6 +91,8 @@ export const getAccountDetailsPaginated = async (
     show_browser?: boolean
     disable_reason?: string
     filter_count?: number
+    remaining_publish_capacity?: number | null
+    reserved_publish_count?: number
     today_reply_count?: number
     keyword_count?: number
     ai_enabled?: boolean
@@ -166,6 +172,8 @@ export const getAccountDetailsPaginated = async (
       show_browser: item.show_browser,
       disable_reason: item.disable_reason,
       filter_count: item.filter_count || 0,
+      remaining_publish_capacity: item.remaining_publish_capacity ?? null,
+      reserved_publish_count: item.reserved_publish_count ?? 0,
       today_reply_count: item.today_reply_count || 0,
       keywordCount: item.keyword_count || 0,
       aiEnabled: item.ai_enabled || false,
@@ -230,6 +238,34 @@ export const renewAccountLoginBatch = (accountIds: string[]): Promise<ApiRespons
 export const updateAccountRemark = (id: string, remark: string): Promise<ApiResponse> => {
   return put(`${COOKIE_PREFIX}/${id}/remark`, { remark })
 }
+
+export const updateAccountPublishCapacity = (id: string, remaining: number): Promise<ApiResponse<{
+  remaining_publish_capacity: number
+  reserved_publish_count: number
+  available_publish_capacity: number
+}>> => put(`${COOKIE_PREFIX}/${encodeURIComponent(id)}/publish-capacity`, { remaining_publish_capacity: remaining })
+
+export interface PublishCapacityReservation {
+  id: string
+  publish_log_id: number
+  status: 'reserved' | 'unknown'
+  item_id?: string | null
+  error_message?: string | null
+  created_at?: string | null
+}
+
+export const getAccountPublishReservations = (id: string): Promise<ApiResponse<PublishCapacityReservation[]>> =>
+  get(`${COOKIE_PREFIX}/${encodeURIComponent(id)}/publish-capacity/reservations`)
+
+export const resolveAccountPublishReservation = (
+  id: string,
+  reservationId: string,
+  outcome: 'success' | 'failed',
+  itemId?: string
+): Promise<ApiResponse> => post(
+  `${COOKIE_PREFIX}/${encodeURIComponent(id)}/publish-capacity/reservations/${encodeURIComponent(reservationId)}/resolve`,
+  { outcome, item_id: itemId || null }
+)
 
 // 更新账号自动确认设置
 export const updateAccountAutoConfirm = (id: string, autoConfirm: boolean): Promise<ApiResponse> => {
