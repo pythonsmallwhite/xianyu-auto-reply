@@ -56,6 +56,8 @@ async def reserve_publish_capacity(owner_id: int, account_id: str, publish_log_i
                 if reservation.status != "released":
                     raise PublishCapacityError("发布请求已有未结算的容量预留，请先对账")
                 reservation.status = "reserved"
+                # 复用日志时保护期从本次预留开始；使用与对账相同的数据库时钟。
+                reservation.created_at = await session.scalar(select(func.now()))
                 reservation.item_id = None
                 reservation.error_message = None
             else:

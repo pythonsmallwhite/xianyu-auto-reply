@@ -133,6 +133,19 @@ class PublishCapacityServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['status'], 'released')
         self.assertEqual(await self.snapshot(1), (2, 0, 'released'))
 
+    async def test_reused_reservation_restarts_manual_reconciliation_protection(self):
+        await capacity_service.reserve_publish_capacity(7, 'acct', 1)
+        await capacity_service.settle_publish_capacity(1, 'failed')
+        reservation_id = await self.reservation_id(1)
+        async with self.maker() as session:
+            reservation = await session.get(PublishCapacityReservation, reservation_id)
+            reservation.created_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=2)
+            await session.commit()
+        self.assertEqual(await capacity_service.reserve_publish_capacity(7, 'acct', 1), 'reserved')
+        with self.assertRaisesRegex(capacity_service.PublishCapacityError, '仍可能进行中'):
+            await capacity_service.resolve_unknown_publish_reservation(7, 'acct', reservation_id, 'failed')
+        self.assertEqual(await self.snapshot(1), (2, 1, 'reserved'))
+
     async def test_manual_failure_clears_unconfirmed_item_id(self):
         await capacity_service.reserve_publish_capacity(7, 'acct', 1)
         await capacity_service.settle_publish_capacity(1, 'unknown', item_id='unconfirmed')
