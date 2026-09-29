@@ -7,12 +7,12 @@ import sys
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 try:
     import aiosqlite  # noqa: F401
-    from sqlalchemy import BigInteger, select
+    from sqlalchemy import select
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-    from sqlalchemy.ext.compiler import compiles
 except ImportError:
     async_sessionmaker = None
 
@@ -23,8 +23,32 @@ ROOT = Path(__file__).resolve().parents[1]
 class InternalProductServiceTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
-        # common.services/common.utils package initializers import live platform
-        # dependencies. Load only the isolated service and its pure inventory rule.
+        # 隔离贯穿整个测试类，使发布日志服务的延迟导入使用同一库存模块。
+        modules = patch.dict(sys.modules)
+        modules.start()
+        cls.addClassCleanup(modules.stop)
+        for name in list(sys.modules):
+            if name in {"common", "app"} or name.startswith(("common.", "app.")):
+                del sys.modules[name]
+        for name in ("common", "common.db", "common.services", "common.utils", "app", "app.core"):
+            package = types.ModuleType(name)
+            package.__path__ = [str(ROOT / name.replace(".", "/"))]
+            sys.modules[name] = package
+
+        def blocked_session(*args, **kwargs):
+            raise AssertionError("离线库存测试禁止使用真实数据库会话")
+
+        session_stub = types.ModuleType("common.db.session")
+        session_stub.async_session_maker = blocked_session
+        capacity_stub = types.ModuleType("common.services.publish_capacity_service")
+        capacity_stub.settle_publish_capacity = AsyncMock(side_effect=AssertionError("库存测试不得结算真实容量"))
+        execution_stub = types.ModuleType("common.services.publish_execution_service")
+        execution_stub.execute_single_publish = AsyncMock(side_effect=AssertionError("库存测试不得发布商品"))
+        paths_stub = types.ModuleType("app.core.paths")
+        paths_stub.STATIC_ROOT = ROOT / "tests" / "offline-static"
+        for stub in (session_stub, capacity_stub, execution_stub, paths_stub):
+            sys.modules[stub.__name__] = stub
+
         from common.db.base_class import Base
         from common.models.internal_product import (
             InternalProduct,
@@ -35,37 +59,20 @@ class InternalProductServiceTests(unittest.IsolatedAsyncioTestCase):
         from common.models.publish_log import PublishLog
         from common.models.xy_account import XYAccount
 
-        @compiles(BigInteger, "sqlite")
-        def _bigint_sqlite(_type, _compiler, **_kwargs):
-            return "INTEGER"
-
-        originals = {
-            name: sys.modules.get(name)
-            for name in ("common.services", "common.utils")
-        }
-        try:
-            for name in originals:
-                package = types.ModuleType(name)
-                package.__path__ = [str(ROOT / name.replace(".", "/"))]
-                sys.modules[name] = package
-            spec = importlib.util.spec_from_file_location(
-                "_internal_product_service_under_test",
-                ROOT / "common/services/internal_product_service.py",
-            )
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-        finally:
-            for name, previous in originals.items():
-                if previous is None:
-                    sys.modules.pop(name, None)
-                else:
-                    sys.modules[name] = previous
+        spec = importlib.util.spec_from_file_location(
+            "common.services.internal_product_service",
+            ROOT / "common/services/internal_product_service.py",
+        )
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
         cls.Service = module.InternalProductService
         publish_log_spec = importlib.util.spec_from_file_location(
-            "_publish_log_service_under_test",
+            "common.services.publish_log_service",
             ROOT / "common/services/publish_log_service.py",
         )
         publish_log_module = importlib.util.module_from_spec(publish_log_spec)
+        sys.modules[publish_log_spec.name] = publish_log_module
         publish_log_spec.loader.exec_module(publish_log_module)
         cls.PublishLogService = publish_log_module.PublishLogService
         cls.InternalProductModule = module
@@ -79,6 +86,8 @@ class InternalProductServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.addAsyncCleanup(self.engine.dispose)
+        self.enterContext(patch.object(self.engine.sync_engine.dialect.type_compiler_instance, "visit_BIGINT", return_value="INTEGER"))
         async with self.engine.begin() as connection:
             await connection.run_sync(
                 lambda sync_connection: self.Base.metadata.create_all(
@@ -95,11 +104,8 @@ class InternalProductServiceTests(unittest.IsolatedAsyncioTestCase):
             )
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
         self.session = self.sessions()
+        self.addAsyncCleanup(self.session.close)
         self.service = self.Service(self.session)
-
-    async def asyncTearDown(self):
-        await self.session.close()
-        await self.engine.dispose()
 
     async def _seed_material_and_logs(self, count=5):
         material = self.ProductMaterial(

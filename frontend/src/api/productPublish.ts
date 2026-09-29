@@ -303,22 +303,61 @@ export interface BatchAccountStatus {
   sync_saved_count: number
 }
 
+export interface BatchStatusData {
+  batch_id: string
+  total: number
+  success: number
+  failed: number
+  unknown: number
+  skipped: number
+  publishing: number
+  pending: number
+  finished: boolean
+  snapshot_available: boolean
+  account_statuses: BatchAccountStatus[]
+  status?: 'pending' | 'running' | 'success' | 'failed' | 'unknown' | 'partial'
+  created_at?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+}
+
 export interface BatchStatusResponse {
   success: boolean
   message: string
-  data: {
-    batch_id: string
-    total: number
-    success: number
-    failed: number
-    unknown: number
-    skipped: number
-    publishing: number
-    pending: number
-    finished: boolean
-    snapshot_available: boolean
-    account_statuses: BatchAccountStatus[]
-  }
+  data: BatchStatusData
+}
+
+export interface PublishBatchAttempt {
+  id: number
+  attempt_no: number
+  status: PublishBatchTarget['status']
+  publish_log_id?: number | null
+  item_id?: string | null
+  error_message?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+}
+
+export interface PublishBatchTarget {
+  id: number
+  account_id: string
+  material_id: number
+  title: string
+  status: 'pending' | 'publishing' | 'success' | 'failed' | 'unknown' | 'skipped'
+  publish_log_id?: number | null
+  attempt_count: number
+  scheduled_at?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  error_message?: string | null
+  attempts: PublishBatchAttempt[]
+}
+
+export interface PublishBatchTargetPage {
+  list: PublishBatchTarget[]
+  total: number
+  page: number
+  page_size: number
 }
 
 export interface PublishSingleResponseData {
@@ -516,6 +555,26 @@ export const publishBatch = (params: {
 /** 查询批量发布任务状态 */
 export const getBatchStatus = (batchId: string): Promise<BatchStatusResponse> =>
   get(`${PREFIX}/publish/batch/${batchId}/status`)
+
+export const getPublishBatches = (page = 1, pageSize = 20): Promise<ApiResponse<{
+  list: BatchStatusData[]
+  total: number
+  page: number
+  page_size: number
+}>> => get(`${PREFIX}/publish/batches?page=${page}&page_size=${pageSize}`)
+
+export const getPublishBatchTargets = (
+  batchId: string,
+  page = 1,
+  pageSize = 20,
+): Promise<ApiResponse<PublishBatchTargetPage>> =>
+  get(`${PREFIX}/publish/batch/${batchId}/targets?page=${page}&page_size=${pageSize}`)
+
+export const retryPublishBatch = (
+  batchId: string,
+  targetIds: number[],
+): Promise<ApiResponse<{ retried: number }>> =>
+  post(`${PREFIX}/publish/batch/${batchId}/retry`, { target_ids: targetIds })
 
 // ==================== 图片上传 ====================
 

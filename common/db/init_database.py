@@ -2021,10 +2021,88 @@ class DatabaseInitializer:
                 INDEX idx_publish_capacity_status (status)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='发布容量预留账本';
         """,
+        "xy_publish_batches": """
+            CREATE TABLE IF NOT EXISTS xy_publish_batches (
+                id VARCHAR(36) PRIMARY KEY,
+                owner_id BIGINT NOT NULL,
+                material_count INT NOT NULL DEFAULT 0,
+                account_count INT NOT NULL DEFAULT 0,
+                total_count INT NOT NULL DEFAULT 0,
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                error_message VARCHAR(1000) DEFAULT NULL,
+                started_at DATETIME DEFAULT NULL,
+                finished_at DATETIME DEFAULT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_publish_batch_owner_created (owner_id, created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='持久批量发布任务';
+        """,
+        "xy_publish_batch_accounts": """
+            CREATE TABLE IF NOT EXISTS xy_publish_batch_accounts (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                batch_id VARCHAR(36) NOT NULL,
+                owner_id BIGINT NOT NULL,
+                account_id VARCHAR(80) NOT NULL,
+                material_count INT NOT NULL DEFAULT 0,
+                sync_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                sync_message VARCHAR(1000) DEFAULT NULL,
+                sync_total_count INT NOT NULL DEFAULT 0,
+                sync_saved_count INT NOT NULL DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uk_publish_batch_account (batch_id, account_id),
+                INDEX idx_publish_batch_account_batch (batch_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='批量发布账号进度';
+        """,
+        "xy_publish_batch_targets": """
+            CREATE TABLE IF NOT EXISTS xy_publish_batch_targets (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                batch_id VARCHAR(36) NOT NULL,
+                owner_id BIGINT NOT NULL,
+                account_id VARCHAR(80) NOT NULL,
+                material_id BIGINT NOT NULL,
+                material_payload JSON NOT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                publish_log_id BIGINT DEFAULT NULL,
+                attempt_count INT NOT NULL DEFAULT 0,
+                lease_token VARCHAR(36) DEFAULT NULL,
+                lease_expires_at DATETIME DEFAULT NULL,
+                scheduled_at DATETIME DEFAULT NULL,
+                started_at DATETIME DEFAULT NULL,
+                finished_at DATETIME DEFAULT NULL,
+                error_message VARCHAR(1000) DEFAULT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uk_publish_batch_target (batch_id, account_id, material_id),
+                INDEX idx_publish_batch_target_batch_status (batch_id, status),
+                INDEX idx_publish_batch_target_claim (status, scheduled_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='批量发布逐项目标';
+        """,
+        "xy_publish_batch_attempts": """
+            CREATE TABLE IF NOT EXISTS xy_publish_batch_attempts (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                batch_id VARCHAR(36) NOT NULL,
+                target_id BIGINT NOT NULL,
+                attempt_no INT NOT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'publishing',
+                publish_log_id BIGINT DEFAULT NULL,
+                started_at DATETIME NOT NULL,
+                finished_at DATETIME DEFAULT NULL,
+                item_id VARCHAR(64) DEFAULT NULL,
+                error_message VARCHAR(1000) DEFAULT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_publish_batch_attempt_target (target_id, attempt_no)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='批量发布尝试记录';
+        """,
     }
     
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]
     COLUMN_MIGRATIONS = {
+        "xy_publish_batch_targets": [
+            ("lease_token", "VARCHAR(36) DEFAULT NULL", "attempt_count"),
+            ("lease_expires_at", "DATETIME DEFAULT NULL", "lease_token"),
+        ],
         "xy_keyword_rules": [
             ("location_name", "VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式定位名称'", "image_url"),
             ("location_longitude", "VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式经度'", "location_name"),

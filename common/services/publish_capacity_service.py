@@ -219,6 +219,8 @@ async def resolve_unknown_publish_reservation(
                     log.item_id = verified_item_id
                     log.error_message = None
                 else:
+                    log.item_id = None
+                    log.item_url = None
                     log.error_message = "用户核对平台后确认未发布"
             return {
                 "id": reservation.id,

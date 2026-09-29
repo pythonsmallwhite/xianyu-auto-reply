@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from collections.abc import Awaitable, Callable
 from typing import Any, Dict, Optional
 
 from loguru import logger
@@ -107,6 +108,9 @@ async def execute_single_publish(
     static_root: str | Path | None = None,
     publish_request_id: str | None = None,
     source_event_id: int | None = None,
+    batch_id: str | None = None,
+    prepared_log_id: int | None = None,
+    before_publish: Callable[[], Awaitable[None]] | None = None,
 ) -> Dict[str, Any]:
     """执行单品发布并返回统一结果。"""
     log_svc = PublishLogService(session)
@@ -138,6 +142,19 @@ async def execute_single_publish(
                     "log_id": existing_log.id,
                 }
 
+    if prepared_log_id is not None:
+        from common.models.publish_log import PublishLog
+
+        existing_log = (await session.execute(select(PublishLog).where(
+            PublishLog.id == prepared_log_id,
+            PublishLog.user_id == user_id,
+            PublishLog.account_id == account_id,
+            PublishLog.batch_id == batch_id,
+            PublishLog.status == "pending",
+        ))).scalar_one_or_none()
+        if existing_log is None:
+            raise ValueError("批次尝试日志不存在或已被处理，禁止重复发布")
+
     # 单品发布严格使用前端选择的账号；启用状态只控制自动任务，不限制手动发布。
     account = await _get_account(session=session, account_id=account_id, user_id=user_id)
     cookies_str = account.cookie if account and account.cookie else ""
@@ -147,7 +164,8 @@ async def execute_single_publish(
             if not account
             else "选择的闲鱼账号缺少Cookie，请重新登录账号"
         )
-        if existing_log and existing_log.status == "failed":
+        if existing_log and existing_log.status in {"failed", "pending"}:
+            existing_log.status = "failed"
             existing_log.error_message = error_message
             await session.commit()
             log = existing_log
@@ -159,6 +177,7 @@ async def execute_single_publish(
                 description=item_data.get("description", ""),
                 price=str(item_data.get("price", "")),
                 material_id=item_data.get("id"),
+                batch_id=batch_id,
                 publish_request_id=publish_request_id,
                 source_event_id=source_event_id,
                 status="failed",
@@ -170,10 +189,15 @@ async def execute_single_publish(
             "log_id": log.id,
         }
 
+    # 批量任务保留地址库分配口径；单品发布仍可使用手工地址。
+    if batch_id is not None:
+        item_data = {key: value for key, value in item_data.items()
+                     if key not in {"address", "address_expected_text"}}
     try:
         resolved_address = await address_svc.resolve_publish_address(account_id, item_data)
     except ValueError as exc:
-        if existing_log and existing_log.status == "failed":
+        if existing_log and existing_log.status in {"failed", "pending"}:
+            existing_log.status = "failed"
             existing_log.error_message = str(exc)
             await session.commit()
             log = existing_log
@@ -185,6 +209,7 @@ async def execute_single_publish(
                 description=item_data.get("description", ""),
                 price=str(item_data.get("price", "")),
                 material_id=item_data.get("id"),
+                batch_id=batch_id,
                 publish_request_id=publish_request_id,
                 source_event_id=source_event_id,
                 status="failed",
@@ -193,12 +218,14 @@ async def execute_single_publish(
         return {"success": False, "message": str(exc), "log_id": log.id}
 
     publish_item_data = resolved_address.apply_to_item_data(item_data)
-    if existing_log and existing_log.status == "failed":
+    if existing_log and existing_log.status in {"failed", "pending"}:
         # 明确失败未产生平台副作用，可安全复用同一幂等日志重试。
-        existing_log.status = "publishing"
+        existing_log.status = "pending" if prepared_log_id is not None else "publishing"
         existing_log.error_message = None
         existing_log.item_id = None
         existing_log.item_url = None
+        for field, value in resolved_address.to_log_fields().items():
+            setattr(existing_log, field, value)
         await session.commit()
         log = existing_log
     else:
@@ -210,6 +237,7 @@ async def execute_single_publish(
                 description=item_data.get("description", ""),
                 price=str(item_data.get("price", "")),
                 material_id=item_data.get("id"),
+                batch_id=batch_id,
                 status="publishing",
                 publish_request_id=publish_request_id,
                 source_event_id=source_event_id,
@@ -240,6 +268,7 @@ async def execute_single_publish(
         return {"success": False, "message": f"发布容量预留失败: {capacity_exc}", "log_id": log.id}
     if capacity_state == "exhausted":
         await log_svc.update_log(log.id, "skipped", error_message="账号剩余可发布数量不足")
+        await settle_publish_capacity(log.id, "failed", error_message="账号剩余可发布数量不足")
         return {"success": False, "skipped": True, "message": "账号剩余可发布数量不足，已跳过", "log_id": log.id}
 
     result = None
@@ -260,6 +289,8 @@ async def execute_single_publish(
             result = capability
         elif capability.get("is_fish_shop"):
             # 鱼小铺账号继续使用已验证稳定的原发布逻辑，不改变任何载荷与接口。
+            if before_publish is not None:
+                await before_publish()
             publish_call_started = True
             result = await publish_single_item(
                 item_data=publish_item_data,
@@ -276,6 +307,8 @@ async def execute_single_publish(
                 "quantity": PERSONAL_SELLER_DEFAULT_STOCK,
                 "stock": PERSONAL_SELLER_DEFAULT_STOCK,
             }
+            if before_publish is not None:
+                await before_publish()
             publish_call_started = True
             result = await publish_personal_single_item(
                 item_data=personal_item_data,

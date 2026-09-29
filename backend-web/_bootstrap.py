@@ -139,8 +139,19 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("已禁用自动启动Goofish定时采集任务（AUTO_START_CRAWL_JOBS=false）")
     
-    yield
-    
+    from app.services.durable_publish_batch_service import run_pending_batches_forever
+    publish_worker_stop = asyncio.Event()
+    publish_worker_task = asyncio.create_task(run_pending_batches_forever(publish_worker_stop))
+    try:
+        yield
+    finally:
+        publish_worker_stop.set()
+        publish_worker_task.cancel()
+        try:
+            await publish_worker_task
+        except asyncio.CancelledError:
+            pass
+
     logger.info(f"{settings.project_name} 关闭中...")
     
     # 停止所有在线聊天IM会话

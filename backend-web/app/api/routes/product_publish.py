@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from loguru import logger
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,7 +23,7 @@ from app.api.deps import get_current_active_user, get_db_session
 from app.services.product_publish_service import MaterialValidationError, ProductMaterialService
 from app.services.account_service import AccountService
 from app.services.platform_category_service import CategoryRecommendationError, PlatformCategoryService
-from app.services.publish_batch_status_service import PublishBatchStatusService
+from app.services.durable_publish_batch_service import DurablePublishBatchService
 from app.services.publish_execution_service import PublishExecutorService, PublishLogService
 from app.services.auto_relist_rule_service import AutoRelistRuleService
 from app.services.auto_relist_serializers import serialize_auto_relist_event, serialize_auto_relist_rule
@@ -226,6 +226,10 @@ class BatchPublishRequest(BaseModel):
     """批量发布请求"""
     account_ids: List[str] = Field(..., min_length=1, description="账号ID列表")
     material_ids: List[int] = Field(..., min_length=1, description="素材ID列表")
+
+
+class BatchRetryRequest(BaseModel):
+    target_ids: List[int] = Field(..., min_length=1, max_length=1000)
 
 
 class AutoRelistRuleRequest(BaseModel):
@@ -732,46 +736,83 @@ async def publish_single(
 @router.post("/publish/batch", response_model=ApiResponse)
 async def publish_batch(
     req: BatchPublishRequest,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Dict[str, Any]:
     """批量发布（后台异步执行，立即返回 batch_id）
     
     前端通过 GET /publish/batch/{batch_id}/status 查询进度。
-    后台会按账号循环，每个账号依次通过闲鱼接口发布所有素材。
+    账号与素材快照持久化后由应用 worker 逐目标领取，重启后继续处理待执行项。
     """
     mat_svc = ProductMaterialService(session)
     from app.services.product_publish_service import _material_to_dict
     materials = [_material_to_dict(m) for m in await mat_svc.list_by_ids(req.material_ids, current_user.id)]
 
-    if not materials:
-        return ApiResponse(success=False, message="没有找到有效的素材")
+    if {int(m["id"]) for m in materials} != set(req.material_ids):
+        return ApiResponse(success=False, message="包含不存在或无权使用的素材")
 
     batch_id = str(uuid.uuid4())
-    await PublishBatchStatusService.init_batch(
-        batch_id=batch_id,
-        account_ids=req.account_ids,
-        material_count=len(materials),
-    )
-
-    # 创建后台任务
-    background_tasks.add_task(
-        _run_batch_publish_background,
-        user_id=current_user.id,
-        account_ids=req.account_ids,
-        materials=materials,
-        batch_id=batch_id,
-    )
+    try:
+        batch = await DurablePublishBatchService(session).create_batch(
+            owner_id=current_user.id,
+            account_ids=req.account_ids,
+            materials=materials,
+            batch_id=batch_id,
+        )
+    except ValueError as exc:
+        await session.rollback()
+        return ApiResponse(success=False, message=str(exc))
 
     return ApiResponse(
         success=True,
-        message=f"批量发布任务已提交，共 {len(req.account_ids)} 个账号 × {len(materials)} 件商品",
+        message=f"批量发布任务已提交，共 {batch.account_count} 个账号 × {batch.material_count} 件商品",
         data={
             "batch_id": batch_id,
-            "total": len(req.account_ids) * len(materials),
+            "total": batch.total_count,
         },
     )
+
+
+@router.get("/publish/batches", response_model=ApiResponse)
+async def list_publish_batches(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    data = await DurablePublishBatchService(session).list_batches(current_user.id, page, page_size)
+    return ApiResponse(success=True, message="查询成功", data=data)
+
+
+@router.get("/publish/batch/{batch_id}/targets", response_model=ApiResponse)
+async def list_publish_batch_targets(
+    batch_id: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    data = await DurablePublishBatchService(session).list_targets(current_user.id, batch_id, page, page_size)
+    if data is None:
+        return ApiResponse(success=False, message="批量任务不存在或无权访问")
+    return ApiResponse(success=True, message="查询成功", data=data)
+
+
+@router.post("/publish/batch/{batch_id}/retry", response_model=ApiResponse)
+async def retry_publish_batch(
+    batch_id: str,
+    req: BatchRetryRequest,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    try:
+        count = await DurablePublishBatchService(session).retry_failed(
+            current_user.id, batch_id, req.target_ids
+        )
+    except ValueError as exc:
+        await session.rollback()
+        return ApiResponse(success=False, message=str(exc))
+    return ApiResponse(success=True, message=f"已重新排队 {count} 个失败项目", data={"retried": count})
 
 
 @router.get("/publish/batch/{batch_id}/status", response_model=ApiResponse)
@@ -781,153 +822,10 @@ async def get_batch_status(
     session: AsyncSession = Depends(get_db_session),
 ) -> Dict[str, Any]:
     """查询批量发布任务进度"""
-    from sqlalchemy import select, func
-    from common.models.publish_log import PublishLog
-
-    unknown_sync_message = "批量任务同步状态缓存不存在，无法判断自动获取商品结果"
-
-    stmt = select(
-        PublishLog.status,
-        func.count().label("cnt"),
-    ).where(
-        PublishLog.batch_id == batch_id,
-        PublishLog.user_id == current_user.id,
-    ).group_by(PublishLog.status)
-
-    rows = (await session.execute(stmt)).all()
-    counts = {r.status: r.cnt for r in rows}
-
-    account_stmt = select(
-        PublishLog.account_id,
-        PublishLog.status,
-        func.count().label("cnt"),
-    ).where(
-        PublishLog.batch_id == batch_id,
-        PublishLog.user_id == current_user.id,
-    ).group_by(PublishLog.account_id, PublishLog.status)
-    account_rows = (await session.execute(account_stmt)).all()
-
-    account_count_map: Dict[str, Dict[str, int]] = {}
-    for row in account_rows:
-        status_map = account_count_map.setdefault(row.account_id, {})
-        status_map[row.status] = int(row.cnt)
-
-    total = sum(counts.values())
-    success = counts.get("success", 0)
-    failed = counts.get("failed", 0)
-    unknown = counts.get("unknown", 0)
-    skipped = counts.get("skipped", 0)
-    publishing = counts.get("publishing", 0)
-    pending = counts.get("pending", 0)
-    batch_snapshot = await PublishBatchStatusService.get_batch_snapshot(batch_id)
-
-    if batch_snapshot is None:
-        if total == 0:
-            return ApiResponse(success=False, message="批量任务不存在或状态已失效")
-
-    account_statuses: List[Dict[str, Any]] = []
-    if batch_snapshot:
-        material_count = int(batch_snapshot.get("material_count") or 0)
-        account_order = batch_snapshot.get("account_order") or []
-        account_sync_map = batch_snapshot.get("accounts") or {}
-        expected_total = material_count * len(account_order)
-        if expected_total > total:
-            total = expected_total
-            pending = max(total - success - failed - unknown - skipped - publishing, 0)
-
-        for account_id in account_order:
-            status_map = account_count_map.get(account_id, {})
-            account_total = material_count if material_count > 0 else sum(status_map.values())
-            account_success = int(status_map.get("success", 0))
-            account_failed = int(status_map.get("failed", 0))
-            account_publishing = int(status_map.get("publishing", 0))
-            account_unknown = int(status_map.get("unknown", 0))
-            account_skipped = int(status_map.get("skipped", 0))
-            account_pending = max(account_total - account_success - account_failed - account_unknown - account_skipped - account_publishing, 0)
-            sync_info = account_sync_map.get(account_id, {})
-            account_statuses.append(
-                {
-                    "account_id": account_id,
-                    "total": account_total,
-                    "success": account_success,
-                    "failed": account_failed,
-                    "unknown": account_unknown,
-                    "skipped": account_skipped,
-                    "publishing": account_publishing,
-                    "pending": account_pending,
-                    "sync_status": sync_info.get("sync_status", "pending"),
-                    "sync_message": sync_info.get("sync_message", "等待该账号发布完成后自动获取商品"),
-                    "sync_total_count": int(sync_info.get("sync_total_count") or 0),
-                    "sync_saved_count": int(sync_info.get("sync_saved_count") or 0),
-                }
-            )
-
-        extra_account_ids = [account_id for account_id in account_count_map.keys() if account_id not in set(account_order)]
-        for account_id in extra_account_ids:
-            status_map = account_count_map.get(account_id, {})
-            account_total = sum(status_map.values())
-            account_success = int(status_map.get("success", 0))
-            account_failed = int(status_map.get("failed", 0))
-            account_unknown = int(status_map.get("unknown", 0))
-            account_skipped = int(status_map.get("skipped", 0))
-            account_publishing = int(status_map.get("publishing", 0))
-            account_pending = int(status_map.get("pending", 0))
-            account_statuses.append(
-                {
-                    "account_id": account_id,
-                    "total": account_total,
-                    "success": account_success,
-                    "failed": account_failed,
-                    "unknown": account_unknown,
-                    "skipped": account_skipped,
-                    "publishing": account_publishing,
-                    "pending": account_pending,
-                    "sync_status": "unknown",
-                    "sync_message": unknown_sync_message,
-                    "sync_total_count": 0,
-                    "sync_saved_count": 0,
-                }
-            )
-    else:
-        for account_id, status_map in account_count_map.items():
-            account_statuses.append(
-                {
-                    "account_id": account_id,
-                    "total": sum(status_map.values()),
-                    "success": int(status_map.get("success", 0)),
-                    "failed": int(status_map.get("failed", 0)),
-                    "unknown": int(status_map.get("unknown", 0)),
-                    "skipped": int(status_map.get("skipped", 0)),
-                    "publishing": int(status_map.get("publishing", 0)),
-                    "pending": int(status_map.get("pending", 0)),
-                    "sync_status": "unknown",
-                    "sync_message": unknown_sync_message,
-                    "sync_total_count": 0,
-                    "sync_saved_count": 0,
-                }
-            )
-    sync_finished = all(
-        account_status.get("sync_status") in {"success", "failed", "skipped", "unknown"}
-        for account_status in account_statuses
-    ) if account_statuses else True
-
-    return ApiResponse(
-        success=True,
-        message="查询成功" if batch_snapshot is not None else "仅恢复已有发布日志，无法确认批次是否完成",
-        data={
-            "batch_id": batch_id,
-            "total": total,
-            "success": success,
-            "failed": failed,
-            "unknown": unknown,
-            "skipped": skipped,
-            "publishing": publishing,
-            "pending": pending,
-            "finished": batch_snapshot is not None and total > 0 and (publishing + pending) == 0 and sync_finished,
-            "snapshot_available": batch_snapshot is not None,
-            "account_statuses": account_statuses,
-        },
-    )
+    data = await DurablePublishBatchService.get_status(session, current_user.id, batch_id)
+    if data is None:
+        return ApiResponse(success=False, message="批量任务不存在或无权访问")
+    return ApiResponse(success=True, message="查询成功", data=data)
 
 
 # ==================== 发布日志接口 ====================
@@ -973,15 +871,22 @@ async def clear_publish_logs(
     from datetime import timedelta
 
     from loguru import logger
-    from sqlalchemy import delete
+    from sqlalchemy import delete, select
 
+    from common.models.publish_batch import PublishBatchTarget
     from common.models.publish_log import PublishLog
 
     try:
         ten_days_ago = get_beijing_now_naive() - timedelta(days=10)
+        # 未完成/未知批次仍需日志判断能否重试与接收人工对账结果。
+        needed_by_batch = select(PublishBatchTarget.id).where(
+            PublishBatchTarget.publish_log_id == PublishLog.id,
+            PublishBatchTarget.status.in_({"pending", "publishing", "unknown"}),
+        ).exists()
         stmt = delete(PublishLog).where(
             PublishLog.user_id == current_user.id,
             PublishLog.created_at < ten_days_ago,
+            ~needed_by_batch,
         )
 
         result = await session.execute(stmt)
@@ -1074,31 +979,3 @@ async def upload_product_videos(
             "urls": [item["url"] for item in videos],
         },
     )
-
-
-# ==================== 后台任务函数 ====================
-
-async def _run_batch_publish_background(
-    user_id: int,
-    account_ids: List[str],
-    materials: List[dict],
-    batch_id: str,
-) -> None:
-    """后台异步执行批量发布任务"""
-    from common.db.session import async_session_maker
-    from loguru import logger
-    import traceback
-
-    async with async_session_maker() as session:
-        svc = PublishExecutorService(session)
-        try:
-            # 直接将 batch_id 传给 service，确保日志与路由返回值一致
-            await svc.batch_publish(
-                user_id=user_id,
-                account_ids=account_ids,
-                materials=materials,
-                batch_id=batch_id,
-            )
-        except Exception as e:
-            logger.error(f"批量发布后台任务异常: {e}\n{traceback.format_exc()}")
-            await PublishBatchStatusService.clear_batch(batch_id)
