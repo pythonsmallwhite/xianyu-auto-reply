@@ -72,3 +72,12 @@
 - 涉及 xianyu-mobile/api/wrappers/items.ts、products.ts 和 app/(tabs)/mine/items.tsx、card-item-relation.tsx，仅四文件。
 - 验证：四文件 TypeScript 转译语法及 diff --check 通过；子代理内存 mock 验证参数/分页/竞态/历史保护。主代理完整 tsc 实际失败：TS6053 缺 expo/tsconfig.base；TS5103 借用 Web 的 TypeScript 5.9.3 不支持移动配置 ignoreDeprecations=6.0。移动依赖未安装，未安装替代版本或改配置掩盖问题，未产出 APK。
 - CR03 状态为已实现待验证；R07/R11 整体仍进行中。CR02 已独立提交 2ab95e5；本修改也独立提交，不 push。下一步接入按内部商品的五档排程，同时补移动依赖和完整验收。
+
+### 2026-09-29：CR01—CR03 独立复核与收尾（随本轮提交）
+
+- 用户授权修复三项并提交，随后确认另一 AI 已完成。核对 main / f258679 后确认修复已分别包含在 807826f（重试保护期）、2ab95e5（成功对账补关联）、f258679（移动历史入口）；复用既有提交，无重复业务改写，不 push。
+- 本轮独立验证：Python 3.13，临时隔离依赖补齐 loguru、pydantic-settings，执行 `python -B -m unittest discover -s tests -p "test_*.py" -v`，57/57 通过，0 失败、0 跳过；CR01/CR02 专项另有 15/15 通过。先前缺依赖运行失败及一次主动中止的静默全套运行不计通过，以最终完整结果为准。
+- CR03 独立验证：四个修改文件 TypeScript 转译语法通过；内存 mock 调用真实 getXianyuItems/getProductItems，验证默认隐藏、显式开启/关闭历史、账号/分页参数与来源字段映射通过。尚缺 Expo 依赖，未执行完整移动类型检查、APK 构建或真机验证；不把 mock 当成真机验收。
+- 状态：CR01/CR02 已离线验证；CR03 代码和接口参数验证通过、完整移动验收待完成。R02/R07/R11 整体仍进行中，三项修复不代表全部业务需求完成。未访问真实平台或 MySQL。
+- 提交边界：本轮只提交此独立复核记录；完整工作树交接中的需求附录及其他 AI 整理继续保留。既有 .gitignore、AGENTS.md、docs/、.workbuddy/、frontend/dist-publish-check/、outputs/ 均未暂存。本轮没有业务代码改动。
+- 当前停点：三项修复已提交并独立复核完成。下一步补移动依赖进行完整类型/真机验证；产品后续开发仍从五档排程接入持久目标开始，本轮不扩大到排程开发。
