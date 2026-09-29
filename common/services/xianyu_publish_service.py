@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncContextManager, Callable
 
 from common.services.backend_web_loader import load_backend_web_class
 
@@ -63,6 +63,7 @@ async def publish_single_item(
     *,
     account_id: str = "",
     owner_id: int | None = None,
+    request_guard: Callable[[], AsyncContextManager[None]] | None = None,
 ) -> dict:
     """使用闲鱼接口执行一次发布，不启动浏览器。"""
     publisher_class = get_xianyu_direct_publisher_class()
@@ -72,6 +73,7 @@ async def publish_single_item(
         cookie=cookie,
         account_id=account_id,
         owner_id=owner_id,
+        **({"request_guard": request_guard} if request_guard is not None else {}),
     )
 
 
@@ -126,6 +128,7 @@ async def publish_personal_single_item(
     *,
     account_id: str = "",
     owner_id: int | None = None,
+    request_guard: Callable[[], AsyncContextManager[None]] | None = None,
 ) -> dict:
     """使用普通卖家网页接口执行一次发布。"""
     publisher_class = get_xianyu_personal_publisher_class()
@@ -135,4 +138,5 @@ async def publish_personal_single_item(
         cookie=cookie,
         account_id=account_id,
         owner_id=owner_id,
+        **({"request_guard": request_guard} if request_guard is not None else {}),
     )

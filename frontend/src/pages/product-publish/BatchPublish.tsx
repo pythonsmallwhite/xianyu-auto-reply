@@ -11,13 +11,15 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import { Layers, CheckCircle, XCircle, Clock, Play, Loader2, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
-import { publishBatch, getBatchStatus, getPublishBatches, getPublishBatchTargets, retryPublishBatch, getMaterials, type ProductMaterial, type BatchAccountStatus, type BatchStatusData, type PublishBatchTarget } from '@/api/productPublish'
+import { useAuthStore } from '@/store/authStore'
+import { publishBatch, getBatchStatus, getPublishBatches, getPublishBatchTargets, retryPublishBatch, getMaterials, type ProductMaterial, type BatchAccountStatus, type BatchStatusData, type PublishBatchTarget, type PublishWindowHours } from '@/api/productPublish'
 import { getAccountDetails, updateAccountPublishCapacity, getAccountPublishReservations, resolveAccountPublishReservation, type PublishCapacityReservation } from '@/api/accounts'
 
 type BatchProgress = BatchStatusData
 
 const getBatchState = (batch: BatchProgress) => {
   if (!batch.snapshot_available) return { label: '状态不完整', className: 'badge-warning' }
+  if (batch.timed_out > 0) return { label: batch.finished ? '部分完成（含超时）' : '执行中（含超时）', className: 'badge-warning' }
   if (!batch.finished) return { label: '执行中', className: 'badge-info' }
   if (batch.status === 'unknown' || batch.unknown > 0) return { label: '结果未知', className: 'badge-warning' }
   if (batch.status === 'failed') return { label: '发布失败', className: 'badge-danger' }
@@ -30,9 +32,16 @@ const getBatchState = (batch: BatchProgress) => {
 
 // sessionStorage 键名：保存进行中的 batch_id
 const BATCH_ID_STORAGE_KEY = 'batch_publish_active_batch_id'
+const PUBLISH_WINDOWS: PublishWindowHours[] = [1, 3, 5, 12, 24]
 
 export function BatchPublish() {
+  const userId = useAuthStore(state => state.user?.user_id)
+  return userId == null ? null : <BatchPublishContent key={userId} userId={userId} />
+}
+
+function BatchPublishContent({ userId }: { userId: number }) {
   const { addToast } = useUIStore()
+  const storageKey = `${BATCH_ID_STORAGE_KEY}:${userId}`
   const [accounts, setAccounts] = useState<any[]>([])
   const [capacityDraft, setCapacityDraft] = useState<Record<string, string>>({})
   const [savingCapacity, setSavingCapacity] = useState<string | null>(null)
@@ -43,6 +52,8 @@ export function BatchPublish() {
   const [materials, setMaterials] = useState<ProductMaterial[]>([])
   const [selectedAccounts, setSelectedAccounts] = useState<Set<string>>(new Set())
   const [selectedMaterials, setSelectedMaterials] = useState<Set<number>>(new Set())
+  const [windowHours, setWindowHours] = useState<PublishWindowHours | null>(null)
+  const [retryWindowHours, setRetryWindowHours] = useState<PublishWindowHours | null>(null)
   const [loadingAccounts, setLoadingAccounts] = useState(true)
   const [loadingMaterials, setLoadingMaterials] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -91,13 +102,13 @@ export function BatchPublish() {
 
   /** 清除 sessionStorage 中的 batch_id */
   const clearStoredBatchId = useCallback(() => {
-    try { sessionStorage.removeItem(BATCH_ID_STORAGE_KEY) } catch { /* ignore */ }
-  }, [])
+    try { sessionStorage.removeItem(storageKey) } catch { /* ignore */ }
+  }, [storageKey])
 
   /** 保存 batch_id 到 sessionStorage */
   const storeBatchId = useCallback((batchId: string) => {
-    try { sessionStorage.setItem(BATCH_ID_STORAGE_KEY, batchId) } catch { /* ignore */ }
-  }, [])
+    try { sessionStorage.setItem(storageKey, batchId) } catch { /* ignore */ }
+  }, [storageKey])
 
   const stopPolling = useCallback(() => {
     if (pollingRef.current) clearInterval(pollingRef.current)
@@ -109,6 +120,7 @@ export function BatchPublish() {
     setTargetTotal(0)
     setExpandedTargets(new Set())
     setSelectedFailedTargets(new Set())
+    setRetryWindowHours(null)
     setTargetError('')
   }, [])
 
@@ -238,7 +250,7 @@ export function BatchPublish() {
       .finally(() => { if (!disposed) setLoadingMaterials(false) })
     void loadHistory()
     try {
-      const savedBatchId = sessionStorage.getItem(BATCH_ID_STORAGE_KEY)
+      const savedBatchId = sessionStorage.getItem(storageKey)
       if (savedBatchId) startPolling(savedBatchId)
     } catch { /* 浏览器可能禁用存储 */ }
 
@@ -328,11 +340,13 @@ export function BatchPublish() {
   const handleSubmit = async () => {
     if (selectedAccounts.size === 0) { addToast({ type: 'warning', message: '请至少选择一个账号' }); return }
     if (selectedMaterials.size === 0) { addToast({ type: 'warning', message: '请至少选择一条素材' }); return }
+    if (windowHours === null) { addToast({ type: 'warning', message: '请选择发布窗口' }); return }
     setSubmitting(true)
     try {
       const res = await publishBatch({
         account_ids: Array.from(selectedAccounts),
         material_ids: Array.from(selectedMaterials),
+        window_hours: windowHours,
       })
       if (res.success) {
         addToast({ type: 'success', message: res.message || '批量发布任务已提交' })
@@ -344,6 +358,10 @@ export function BatchPublish() {
           startPolling(batchId)
           setProgress({
             batch_id: batchId,
+            window_hours: windowHours,
+            window_started_at: null,
+            deadline_at: null,
+            timed_out: 0,
             total: totalCount,
             success: 0,
             failed: 0,
@@ -405,7 +423,11 @@ export function BatchPublish() {
 
   const retrySelected = async () => {
     if (!progress?.finished || statusError || statusLoading || retrying || selectedFailedTargets.size === 0) return
-    if (!window.confirm(`确认重新发布选中的 ${selectedFailedTargets.size} 个失败项目？这会再次调用闲鱼发布接口。`)) return
+    if (retryWindowHours === null) {
+      addToast({ type: 'warning', message: '请选择重试窗口' })
+      return
+    }
+    if (!window.confirm(`确认重新发布选中的 ${selectedFailedTargets.size} 个失败项目？新窗口只处理这些明确失败项，不会重试成功或结果未知项目。`)) return
     const batchId = progress.batch_id
     const targetIds = Array.from(selectedFailedTargets)
     const generation = beginBatchRequest(batchId)
@@ -413,7 +435,7 @@ export function BatchPublish() {
     storeBatchId(batchId)
     setRetrying(true)
     try {
-      const response = await retryPublishBatch(batchId, targetIds)
+      const response = await retryPublishBatch(batchId, targetIds, retryWindowHours)
       if (generation !== batchGenerationRef.current) return
       if (!response.success) throw new Error(response.message || '重试未能确认，请刷新状态后核对')
       setProgress(previous => previous && { ...previous, finished: false, status: 'pending' })
@@ -444,7 +466,7 @@ export function BatchPublish() {
   }
 
   const total = selectedAccounts.size * selectedMaterials.size
-  const isDisabled = submitting || retrying || statusLoading || total === 0 || !!statusError || (activeBatchId !== null && (!progress || !progress.finished))
+  const isDisabled = submitting || retrying || statusLoading || total === 0 || windowHours === null || !!statusError || (activeBatchId !== null && (!progress || !progress.finished))
 
   return (
     <div className="space-y-3 sm:space-y-4">
@@ -586,7 +608,21 @@ export function BatchPublish() {
         </motion.div>
       </div>
 
-      {/* 提交按钮 */}
+      <div className="vben-card">
+        <div className="vben-card-header"><h2 className="vben-card-title">发布窗口</h2></div>
+        <div className="vben-card-body">
+          <p className="text-xs text-slate-500 mb-2">必须选择窗口，提交时不会预选默认值。</p>
+          <div className="flex flex-wrap gap-2">
+            {PUBLISH_WINDOWS.map(hours => (
+              <button type="button" key={hours} onClick={() => setWindowHours(hours)}
+                className={`px-3 py-2 rounded-lg border text-sm ${windowHours === hours ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-300 text-slate-600'}`}>
+                {hours} 小时
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
       <div className="flex justify-center">
         <button className="btn-ios-primary min-w-48" disabled={isDisabled} onClick={handleSubmit}>
           {submitting
@@ -609,7 +645,7 @@ export function BatchPublish() {
                 <span className="text-sm font-medium">{batch.batch_id.slice(0, 8)}...</span>
                 <span className={getBatchState(batch).className}>{getBatchState(batch).label}</span>
               </div>
-              <div className="text-xs text-slate-500 mt-1">总数 {batch.total} · 成功 {batch.success} · 失败 {batch.failed} · 未知 {batch.unknown} · 跳过 {batch.skipped}</div>
+              <div className="text-xs text-slate-500 mt-1">总数 {batch.total} · 成功 {batch.success} · 失败 {batch.failed} · 超时 {batch.timed_out} · 未知 {batch.unknown} · 跳过 {batch.skipped}</div>
             </button>
           ))}
           {historyTotal > 10 && (
@@ -643,6 +679,8 @@ export function BatchPublish() {
                 : <Loader2 className="w-4 h-4 animate-spin text-blue-500" />}
           </div>
           <div className="vben-card-body">
+            <div className="text-xs text-slate-500 mb-3">窗口：{progress.window_hours ? `${progress.window_hours} 小时` : '—'} · 开始：{progress.window_started_at || '—'} · 截止：{progress.deadline_at || '—'} · 超时：{progress.timed_out}</div>
+            {progress.timed_out > 0 && <p className="text-xs text-amber-600 mb-3">存在超时项目；即使平台后来明确成功，也保留超时原因，不将批次伪装为全部按时成功。</p>}
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
               {[
                 { label: '总数', value: progress.total, icon: <Layers className="w-5 h-5" />, cls: 'stat-icon-primary' },
@@ -678,10 +716,16 @@ export function BatchPublish() {
             {progress.finished && progress.failed > 0 && (
               <div className="mt-4 border-t border-slate-200 dark:border-slate-700 pt-4 flex items-center justify-between gap-2">
                 <h3 className="text-sm font-semibold">失败项目（仅失败项可重试）</h3>
-                <button type="button" className="btn-ios-primary text-xs py-1.5 px-3 disabled:opacity-50"
-                  disabled={retrying || statusLoading || !!statusError || selectedFailedTargets.size === 0} onClick={() => void retrySelected()}>
-                  <RefreshCw className="w-3 h-3" />{retrying ? '排队中...' : `重试选中 (${selectedFailedTargets.size})`}
-                </button>
+                <div className="flex items-center gap-2">
+                  <select className="input-ios text-xs py-1.5" aria-label="选择重试窗口" value={retryWindowHours ?? ''} onChange={event => setRetryWindowHours(event.target.value ? Number(event.target.value) as PublishWindowHours : null)}>
+                    <option value="">重试窗口</option>
+                    {PUBLISH_WINDOWS.map(hours => <option key={hours} value={hours}>{hours} 小时</option>)}
+                  </select>
+                  <button type="button" className="btn-ios-primary text-xs py-1.5 px-3 disabled:opacity-50"
+                  disabled={retrying || statusLoading || !!statusError || !!targetError || retryWindowHours === null || selectedFailedTargets.size === 0} onClick={() => void retrySelected()}>
+                    <RefreshCw className="w-3 h-3" />{retrying ? '排队中...' : `重试选中 (${selectedFailedTargets.size})`}
+                  </button>
+                </div>
               </div>
             )}
             {targetError && (
@@ -710,6 +754,9 @@ export function BatchPublish() {
                     <span className="truncate flex-1">{target.account_id} · {target.title}</span>
                     <span className="text-slate-500">{target.status}</span>
                   </div>
+                  <div className="mt-1 text-slate-500">计划：{target.scheduled_at || '—'} · 可执行：{target.available_at || '—'} · 截止：{target.deadline_at || '—'}</div>
+                  <div className="text-slate-500">请求发起：{target.request_started_at || '—'} · 最小间隔：{target.minimum_gap_seconds} 秒</div>
+                  {target.schedule_error && <p className="text-amber-600 break-all">超时/排程原因：{target.schedule_error}</p>}
                   {target.error_message && <p className="ml-5 mt-1 text-amber-600 break-all">{target.error_message}</p>}
                   <div id={`target-attempts-${target.id}`} hidden={!expandedTargets.has(target.id)} className="ml-5 mt-2 space-y-2 text-slate-500 break-all">
                     {target.attempts.length === 0 && <p>暂无尝试记录</p>}

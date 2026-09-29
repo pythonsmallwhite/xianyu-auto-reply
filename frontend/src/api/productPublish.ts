@@ -303,8 +303,14 @@ export interface BatchAccountStatus {
   sync_saved_count: number
 }
 
+export type PublishWindowHours = 1 | 3 | 5 | 12 | 24
+
 export interface BatchStatusData {
   batch_id: string
+  window_hours: number | null
+  window_started_at: string | null
+  deadline_at: string | null
+  timed_out: number
   total: number
   success: number
   failed: number
@@ -330,7 +336,14 @@ export interface BatchStatusResponse {
 export interface PublishBatchAttempt {
   id: number
   attempt_no: number
-  status: PublishBatchTarget['status']
+  status: PublishBatchTarget['status'] | 'deferred'
+  window_hours: number | null
+  window_started_at: string | null
+  minimum_gap_seconds: number
+  scheduled_at: string | null
+  deadline_at: string | null
+  request_started_at: string | null
+  schedule_error: string | null
   publish_log_id?: number | null
   item_id?: string | null
   error_message?: string | null
@@ -340,6 +353,14 @@ export interface PublishBatchAttempt {
 
 export interface PublishBatchTarget {
   id: number
+  internal_product_id: number | null
+  window_hours: number | null
+  window_started_at: string | null
+  deadline_at: string | null
+  minimum_gap_seconds: number
+  available_at: string | null
+  request_started_at: string | null
+  schedule_error: string | null
   account_id: string
   material_id: number
   title: string
@@ -550,6 +571,7 @@ export const publishSingle = (params: {
 export const publishBatch = (params: {
   account_ids: string[]
   material_ids: number[]
+  window_hours: PublishWindowHours
 }): Promise<PublishBatchResponse> => post(`${PREFIX}/publish/batch`, params)
 
 /** 查询批量发布任务状态 */
@@ -573,8 +595,9 @@ export const getPublishBatchTargets = (
 export const retryPublishBatch = (
   batchId: string,
   targetIds: number[],
+  windowHours: PublishWindowHours,
 ): Promise<ApiResponse<{ retried: number }>> =>
-  post(`${PREFIX}/publish/batch/${batchId}/retry`, { target_ids: targetIds })
+  post(`${PREFIX}/publish/batch/${batchId}/retry`, { target_ids: targetIds, window_hours: windowHours })
 
 // ==================== 图片上传 ====================
 

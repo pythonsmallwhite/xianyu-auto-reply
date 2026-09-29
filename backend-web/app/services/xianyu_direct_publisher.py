@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncContextManager, Callable
 
 from loguru import logger
 
@@ -41,6 +41,7 @@ class XianyuDirectPublisher:
         cookie: str,
         account_id: str,
         owner_id: int | None,
+        request_guard: Callable[[], AsyncContextManager[None]] | None = None,
     ) -> dict[str, Any]:
         """上传媒体并调用最终发布接口，返回统一发布结果。"""
         try:
@@ -78,11 +79,12 @@ class XianyuDirectPublisher:
             origin=SELLER_ORIGIN,
             referer=SELLER_REFERER,
             extra_headers={"idle_site_biz_code": "COMMONPRO"},
+            **({"request_guard": request_guard} if request_guard is not None else {}),
         )
         if not response.get("success"):
             logger.error(
-                f"闲鱼商品发布接口失败完整返回: account_id={account_id}, "
-                f"response={json.dumps(response, ensure_ascii=False, default=str)}"
+                f"闲鱼商品发布接口失败: account_id={account_id}, "
+                f"unknown={bool(response.get('_request_status_unknown'))}"
             )
             return {
                 "success": False,

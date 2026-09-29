@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncContextManager, Callable
 
 from loguru import logger
 
@@ -82,6 +82,7 @@ class XianyuPersonalPublisher:
         cookie: str,
         account_id: str,
         owner_id: int | None,
+        request_guard: Callable[[], AsyncContextManager[None]] | None = None,
     ) -> dict[str, Any]:
         """
         上传媒体并调用普通卖家发布接口。
@@ -179,11 +180,12 @@ class XianyuPersonalPublisher:
             extra_params={"spm_cnt": "a21ybx.publish.0.0"},
             origin=PUBLISH_ORIGIN,
             referer=PUBLISH_REFERER,
+            **({"request_guard": request_guard} if request_guard is not None else {}),
         )
         if not response.get("success"):
             logger.error(
-                f"闲鱼普通卖家发布接口失败完整返回: account_id={account_id}, "
-                f"response={json.dumps(response, ensure_ascii=False, default=str)}"
+                f"闲鱼普通卖家发布接口失败: account_id={account_id}, "
+                f"unknown={bool(response.get('_request_status_unknown'))}"
             )
             return {
                 "success": False,

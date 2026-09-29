@@ -8593,6 +8593,11 @@ export interface components {
              * @description 素材ID列表
              */
             material_ids: number[];
+            /**
+             * Window Hours
+             * @description 显式选择发布窗口（小时）
+             */
+            window_hours: 1 | 3 | 5 | 12 | 24;
         };
         /**
          * BatchRateRequest

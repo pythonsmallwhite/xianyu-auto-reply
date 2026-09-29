@@ -5,6 +5,7 @@ import importlib
 import sys
 import types
 import unittest
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
@@ -85,6 +86,8 @@ class PublishExecutionTests(unittest.IsolatedAsyncioTestCase):
 
         self.events = []
         self.before = AsyncMock(side_effect=lambda: self.events.append("before_publish"))
+        self.guard_events = []
+        self.request_guard = None
         self.detect = self.enterContext(patch.object(
             self.module, "detect_publish_account_capability", new=AsyncMock(return_value={"success": True, "is_fish_shop": True}),
         ))
@@ -189,6 +192,67 @@ class PublishExecutionTests(unittest.IsolatedAsyncioTestCase):
                 self.settle.assert_awaited_once_with(log.id, "success", item_id="offline-item", error_message=None)
                 self.assertEqual(self.events, ["before_publish", "platform"])
         self.assertEqual([(log.status, log.item_id) for log in await self.logs()], [("success", "offline-item")] * 2)
+
+    async def test_request_guard_starts_after_preparation_and_before_publish_http(self):
+        log = await self.prepare_log()
+        events = []
+
+        @asynccontextmanager
+        async def guard():
+            events.append("guard-enter")
+            yield
+            events.append("guard-exit")
+
+        async def publish(**kwargs):
+            events.append("prepared")
+            async with kwargs["request_guard"]():
+                events.append("http")
+            return await self.platform_result(**kwargs)
+
+        self.shop.side_effect = publish
+        result = await self.execute(
+            batch_id="batch-1", prepared_log_id=log.id, request_guard=guard
+        )
+        self.assertTrue(result["success"])
+        self.assertEqual(events, ["prepared", "guard-enter", "http", "guard-exit"])
+        self.assertEqual(self.events, ["before_publish", "platform"])
+        self.before.assert_awaited_once_with()
+        self.assertTrue(self.shop.await_args.kwargs["request_guard"])
+
+    async def test_guard_exit_errors_keep_unknown_log_and_capacity(self):
+        from common.utils.batch_schedule import PublishScheduleDeferred, PublishWindowExpired
+
+        async def publish(**kwargs):
+            async with kwargs["request_guard"]():
+                self.events.append("http")
+            return await self.platform_result(**kwargs)
+
+        self.shop.side_effect = publish
+        errors = (RuntimeError("lease release failed"), PublishScheduleDeferred(), PublishWindowExpired())
+        for index, error in enumerate(errors, 1):
+            with self.subTest(error=type(error).__name__):
+                self.events.clear()
+                self.before.reset_mock()
+                self.shop.reset_mock()
+                log = await self.prepare_log(batch_id=f"guard-batch-{index}")
+
+                @asynccontextmanager
+                async def guard():
+                    yield
+                    raise error
+
+                result = await self.execute(
+                    batch_id=f"guard-batch-{index}",
+                    prepared_log_id=log.id,
+                    request_guard=guard,
+                )
+                self.assertFalse(result["success"])
+                self.assertTrue(result["unknown"])
+                self.assertEqual(result["log_id"], log.id)
+                current = (await self.logs())[-1]
+                self.assertEqual((current.id, current.status), (log.id, "unknown"))
+                self.settle.assert_awaited_with(log.id, "unknown", error_message=str(error))
+                self.assertEqual(self.events, ["before_publish", "http"])
 
     async def test_batch_resolves_pool_address_and_persists_it_on_prepared_log_before_publish(self):
         self.item.update(address="素材旧地址", address_expected_text="素材旧校验文本")

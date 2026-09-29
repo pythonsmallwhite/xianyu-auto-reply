@@ -10,6 +10,31 @@ from typing import Protocol
 WINDOW_HOURS = frozenset({1, 3, 5, 12, 24})
 
 
+class PublishScheduleDeferred(RuntimeError):
+    """A publish request must wait for its durable product slot."""
+
+    def __init__(self, retry_at: datetime | None = None, message: str = "发布排程尚未到可执行时间"):
+        super().__init__(message)
+        self.retry_at = retry_at
+
+
+class PublishWindowExpired(RuntimeError):
+    """A target missed its persisted publish window."""
+
+
+def validate_window_hours(window_hours: int) -> int:
+    if window_hours not in WINDOW_HOURS:
+        raise ValueError("window_hours must be 1, 3, 5, 12, or 24")
+    return window_hours
+
+
+def minimum_gap_seconds(account_count: int, window_hours: int) -> float:
+    if account_count < 1:
+        raise ValueError("account_count must be positive")
+    validate_window_hours(window_hours)
+    return window_hours * 3600.0 / (2 * account_count)
+
+
 class _RandomSource(Protocol):
     def expovariate(self, lambd: float) -> float: ...
 

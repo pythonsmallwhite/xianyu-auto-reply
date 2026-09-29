@@ -32,7 +32,7 @@ from common.schemas.common import ApiResponse
 from common.utils.local_image_upload import ImageUploadError, save_uploaded_image
 from common.utils.local_video_upload import VideoUploadError, save_uploaded_video
 from app.core.paths import get_upload_path
-from common.utils.time_utils import get_beijing_now_naive
+from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
 
 
 # 自动续售接口业务错误码。HTTP 层仍统一返回 200，由前端依据 success/code 处理。
@@ -226,10 +226,12 @@ class BatchPublishRequest(BaseModel):
     """批量发布请求"""
     account_ids: List[str] = Field(..., min_length=1, description="账号ID列表")
     material_ids: List[int] = Field(..., min_length=1, description="素材ID列表")
+    window_hours: Literal[1, 3, 5, 12, 24] = Field(..., description="显式选择发布窗口（小时）")
 
 
 class BatchRetryRequest(BaseModel):
     target_ids: List[int] = Field(..., min_length=1, max_length=1000)
+    window_hours: Literal[1, 3, 5, 12, 24] = Field(..., description="显式选择新的重试窗口（小时）")
 
 
 class AutoRelistRuleRequest(BaseModel):
@@ -758,6 +760,7 @@ async def publish_batch(
             account_ids=req.account_ids,
             materials=materials,
             batch_id=batch_id,
+            window_hours=req.window_hours,
         )
     except ValueError as exc:
         await session.rollback()
@@ -769,6 +772,10 @@ async def publish_batch(
         data={
             "batch_id": batch_id,
             "total": batch.total_count,
+            "window_hours": batch.window_hours,
+            "window_started_at": safe_isoformat(batch.window_started_at),
+            "deadline_at": safe_isoformat(batch.deadline_at),
+            "timed_out": 0,
         },
     )
 
@@ -807,12 +814,13 @@ async def retry_publish_batch(
 ) -> Dict[str, Any]:
     try:
         count = await DurablePublishBatchService(session).retry_failed(
-            current_user.id, batch_id, req.target_ids
+            current_user.id, batch_id, req.target_ids, window_hours=req.window_hours
         )
     except ValueError as exc:
         await session.rollback()
         return ApiResponse(success=False, message=str(exc))
-    return ApiResponse(success=True, message=f"已重新排队 {count} 个失败项目", data={"retried": count})
+    status = await DurablePublishBatchService.get_status(session, current_user.id, batch_id)
+    return ApiResponse(success=True, message=f"已重新排队 {count} 个失败项目", data={"retried": count, **status})
 
 
 @router.get("/publish/batch/{batch_id}/status", response_model=ApiResponse)

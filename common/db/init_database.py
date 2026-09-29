@@ -2028,6 +2028,9 @@ class DatabaseInitializer:
                 material_count INT NOT NULL DEFAULT 0,
                 account_count INT NOT NULL DEFAULT 0,
                 total_count INT NOT NULL DEFAULT 0,
+                window_hours INT DEFAULT NULL,
+                window_started_at DATETIME DEFAULT NULL,
+                deadline_at DATETIME DEFAULT NULL,
                 status VARCHAR(20) NOT NULL DEFAULT 'pending',
                 error_message VARCHAR(1000) DEFAULT NULL,
                 started_at DATETIME DEFAULT NULL,
@@ -2036,6 +2039,21 @@ class DatabaseInitializer:
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 INDEX idx_publish_batch_owner_created (owner_id, created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='持久批量发布任务';
+        """,
+        "xy_publish_product_schedules": """
+            CREATE TABLE IF NOT EXISTS xy_publish_product_schedules (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                owner_id BIGINT NOT NULL,
+                internal_product_id BIGINT NOT NULL,
+                last_request_started_at DATETIME DEFAULT NULL,
+                lease_token VARCHAR(36) DEFAULT NULL,
+                lease_target_id BIGINT DEFAULT NULL,
+                lease_expires_at DATETIME DEFAULT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uk_publish_product_schedule (owner_id, internal_product_id),
+                INDEX idx_publish_product_schedule_lease (lease_expires_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='内部商品发布请求排程协调';
         """,
         "xy_publish_batch_accounts": """
             CREATE TABLE IF NOT EXISTS xy_publish_batch_accounts (
@@ -2061,7 +2079,15 @@ class DatabaseInitializer:
                 owner_id BIGINT NOT NULL,
                 account_id VARCHAR(80) NOT NULL,
                 material_id BIGINT NOT NULL,
+                internal_product_id BIGINT DEFAULT NULL,
                 material_payload JSON NOT NULL,
+                window_hours INT DEFAULT NULL,
+                window_started_at DATETIME DEFAULT NULL,
+                deadline_at DATETIME DEFAULT NULL,
+                minimum_gap_seconds DOUBLE NOT NULL DEFAULT 0,
+                available_at DATETIME DEFAULT NULL,
+                request_started_at DATETIME DEFAULT NULL,
+                schedule_error VARCHAR(1000) DEFAULT NULL,
                 status VARCHAR(20) NOT NULL DEFAULT 'pending',
                 publish_log_id BIGINT DEFAULT NULL,
                 attempt_count INT NOT NULL DEFAULT 0,
@@ -2086,6 +2112,13 @@ class DatabaseInitializer:
                 attempt_no INT NOT NULL,
                 status VARCHAR(20) NOT NULL DEFAULT 'publishing',
                 publish_log_id BIGINT DEFAULT NULL,
+                window_hours INT DEFAULT NULL,
+                window_started_at DATETIME DEFAULT NULL,
+                scheduled_at DATETIME DEFAULT NULL,
+                deadline_at DATETIME DEFAULT NULL,
+                minimum_gap_seconds DOUBLE NOT NULL DEFAULT 0,
+                request_started_at DATETIME DEFAULT NULL,
+                schedule_error VARCHAR(1000) DEFAULT NULL,
                 started_at DATETIME NOT NULL,
                 finished_at DATETIME DEFAULT NULL,
                 item_id VARCHAR(64) DEFAULT NULL,
@@ -2099,9 +2132,31 @@ class DatabaseInitializer:
     
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]
     COLUMN_MIGRATIONS = {
+        "xy_publish_batches": [
+            ("window_hours", "INT DEFAULT NULL", "total_count"),
+            ("window_started_at", "DATETIME DEFAULT NULL", "window_hours"),
+            ("deadline_at", "DATETIME DEFAULT NULL", "window_started_at"),
+        ],
         "xy_publish_batch_targets": [
+            ("internal_product_id", "BIGINT DEFAULT NULL", "material_id"),
+            ("window_hours", "INT DEFAULT NULL", "material_payload"),
+            ("window_started_at", "DATETIME DEFAULT NULL", "window_hours"),
+            ("deadline_at", "DATETIME DEFAULT NULL", "window_started_at"),
+            ("minimum_gap_seconds", "DOUBLE NOT NULL DEFAULT 0", "deadline_at"),
+            ("available_at", "DATETIME DEFAULT NULL", "minimum_gap_seconds"),
+            ("request_started_at", "DATETIME DEFAULT NULL", "available_at"),
+            ("schedule_error", "VARCHAR(1000) DEFAULT NULL", "request_started_at"),
             ("lease_token", "VARCHAR(36) DEFAULT NULL", "attempt_count"),
             ("lease_expires_at", "DATETIME DEFAULT NULL", "lease_token"),
+        ],
+        "xy_publish_batch_attempts": [
+            ("window_hours", "INT DEFAULT NULL", "publish_log_id"),
+            ("window_started_at", "DATETIME DEFAULT NULL", "window_hours"),
+            ("scheduled_at", "DATETIME DEFAULT NULL", "window_started_at"),
+            ("deadline_at", "DATETIME DEFAULT NULL", "scheduled_at"),
+            ("minimum_gap_seconds", "DOUBLE NOT NULL DEFAULT 0", "deadline_at"),
+            ("request_started_at", "DATETIME DEFAULT NULL", "minimum_gap_seconds"),
+            ("schedule_error", "VARCHAR(1000) DEFAULT NULL", "request_started_at"),
         ],
         "xy_keyword_rules": [
             ("location_name", "VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式定位名称'", "image_url"),
@@ -2495,6 +2550,29 @@ class DatabaseInitializer:
                         logger.warning(
                             f"✗ 表 {table_name} 字段 {col_name} 迁移失败: {describe_ddl_error(e)}"
                         )
+
+            # 保留随机计划和实际请求的微秒，避免截断导致最小间隔不足。
+            schedule_time_columns = {
+                "xy_publish_batches": ("window_started_at", "deadline_at"),
+                "xy_publish_batch_targets": ("window_started_at", "deadline_at", "scheduled_at",
+                                             "available_at", "request_started_at", "lease_expires_at"),
+                "xy_publish_batch_attempts": ("window_started_at", "scheduled_at", "deadline_at", "request_started_at"),
+                "xy_publish_product_schedules": ("last_request_started_at", "lease_expires_at"),
+            }
+            for table_name, column_names in schedule_time_columns.items():
+                for column_name in column_names:
+                    try:
+                        precision = (await conn.execute(text("""
+                            SELECT DATETIME_PRECISION FROM information_schema.COLUMNS
+                            WHERE TABLE_SCHEMA = DATABASE()
+                            AND TABLE_NAME = :table_name AND COLUMN_NAME = :column_name
+                        """), {"table_name": table_name, "column_name": column_name})).scalar()
+                        if precision is not None and precision < 6:
+                            await conn.execute(text(
+                                f"ALTER TABLE `{table_name}` MODIFY COLUMN `{column_name}` DATETIME(6) DEFAULT NULL"
+                            ))
+                    except Exception as exc:
+                        logger.warning(f"✗ 排程时间精度迁移失败 {table_name}.{column_name}: {describe_ddl_error(exc)}")
 
             # xy_users: account_limit 字段允许为空且默认值为空
             try:

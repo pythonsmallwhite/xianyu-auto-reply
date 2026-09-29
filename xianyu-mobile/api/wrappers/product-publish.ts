@@ -85,9 +85,56 @@ export interface BatchAccountStatus {
 
 export class PublishBatchUnavailableError extends Error {}
 
+export type PublishWindowHours = 1 | 3 | 5 | 12 | 24;
+
+export interface PublishBatchAttempt {
+  id: number;
+  attempt_no: number;
+  status: string;
+  window_hours: number | null;
+  window_started_at: string | null;
+  scheduled_at: string | null;
+  deadline_at: string | null;
+  request_started_at: string | null;
+  schedule_error: string | null;
+  minimum_gap_seconds: number;
+  error_message?: string | null;
+}
+
+export interface PublishBatchTarget {
+  id: number;
+  account_id: string;
+  material_id: number;
+  title: string;
+  status: string;
+  internal_product_id: number | null;
+  window_hours: number | null;
+  window_started_at: string | null;
+  scheduled_at: string | null;
+  deadline_at: string | null;
+  available_at: string | null;
+  request_started_at: string | null;
+  minimum_gap_seconds: number;
+  schedule_error: string | null;
+  error_message?: string | null;
+  attempts: PublishBatchAttempt[];
+}
+
+export interface PublishBatchTargetPage {
+  list: PublishBatchTarget[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
 export interface BatchPublishProgress {
   batch_id: string;
   total: number;
+  status?: 'pending' | 'running' | 'success' | 'failed' | 'unknown' | 'partial';
+  window_hours: number | null;
+  window_started_at: string | null;
+  deadline_at: string | null;
+  timed_out: number;
   success: number;
   failed: number;
   unknown: number;
@@ -109,13 +156,35 @@ export async function getPublishMaterials(page: number, pageSize = 100): Promise
   return result;
 }
 
-export async function publishBatch(accountIds: string[], materialIds: number[]): Promise<{ batch_id: string; total: number }> {
+export async function publishBatch(accountIds: string[], materialIds: number[], windowHours: PublishWindowHours): Promise<{ batch_id: string; total: number }> {
   const client = await getApiClient();
   const { data } = (await (client.POST as any)(PREFIX + '/publish/batch', {
-    body: { account_ids: accountIds, material_ids: materialIds },
+    body: { account_ids: accountIds, material_ids: materialIds, window_hours: windowHours },
   })) as { data?: unknown };
   const result = unwrapData<{ batch_id: string; total: number }>(data);
   if (!result?.batch_id) throw new Error('批量发布响应缺少任务 ID');
+  return result;
+}
+
+export async function getBatchPublishTargets(batchId: string, page = 1, pageSize = 20): Promise<PublishBatchTargetPage> {
+  const client = await getApiClient();
+  const { data } = (await (client.GET as any)(PREFIX + '/publish/batch/' + encodeURIComponent(batchId) + '/targets', {
+    params: { query: { page, page_size: pageSize } },
+  })) as { data?: unknown };
+  const result = unwrapData<PublishBatchTargetPage>(data);
+  if (!result || !Array.isArray(result.list)) throw new Error('批量发布详情响应无效');
+  return result;
+}
+
+export async function retryPublishBatch(batchId: string, targetIds: number[], windowHours: PublishWindowHours): Promise<{ retried: number }> {
+  const client = await getApiClient();
+  const { data } = (await (client.POST as any)(PREFIX + '/publish/batch/' + encodeURIComponent(batchId) + '/retry', {
+    body: { target_ids: targetIds, window_hours: windowHours },
+  })) as { data?: unknown };
+  const result = unwrapData<{ retried: number }>(data);
+  if (!result || !Number.isInteger(result.retried) || result.retried < 0) {
+    throw new Error('批量重试响应无效，受理结果无法确认');
+  }
   return result;
 }
 

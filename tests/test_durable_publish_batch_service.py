@@ -50,6 +50,9 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
         from common.models.publish_batch import PublishBatch, PublishBatchAccount, PublishBatchAttempt, PublishBatchTarget
         from common.models.publish_log import PublishLog
         from common.models.xy_account import XYAccount
+        from common.models.product_material import ProductMaterial
+        from common.models.internal_product import InternalProduct
+        from common.models.publish_batch_schedule import PublishProductSchedule
 
         spec = importlib.util.spec_from_file_location(
             "_durable_publish_batch_service_under_test",
@@ -62,9 +65,16 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
         cls.Batch, cls.Account, cls.Attempt, cls.Target, cls.Log, cls.XYAccount = (
             PublishBatch, PublishBatchAccount, PublishBatchAttempt, PublishBatchTarget, PublishLog, XYAccount,
         )
-        cls.models = (cls.Batch, cls.Account, cls.Attempt, cls.Target, cls.Log, cls.XYAccount)
+        cls.Material, cls.Product, cls.Schedule = ProductMaterial, InternalProduct, PublishProductSchedule
+        cls.models = (cls.Batch, cls.Account, cls.Attempt, cls.Target, cls.Log, cls.XYAccount,
+                      cls.Material, cls.Product, cls.Schedule)
 
     async def asyncSetUp(self):
+        for name in ("socket.socket.connect", "socket.socket.connect_ex", "socket.getaddrinfo"):
+            self.enterContext(patch(name, side_effect=AssertionError("离线测试禁止网络访问")))
+        self.now = self.module.get_beijing_now_naive().replace(microsecond=0)
+        self.enterContext(patch.object(self.Service, "_database_now", new=AsyncMock(side_effect=lambda session: self.now)))
+        self.offsets = self.enterContext(patch.object(self.module, "plan_product_offsets", side_effect=lambda n, t: tuple(i * t * 3600 / (2 * n) for i in range(n))))
         self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
         self.addAsyncCleanup(self.engine.dispose)
         # 仅修改当前 SQLite 引擎的编译器，避免全局 BigInteger 编译注册污染。
@@ -84,12 +94,23 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
             ])
             await session.commit()
 
-    async def create(self, batch_id="batch-1", owner_id=7, account_ids=None, material_ids=(11,)):
+    async def create(self, batch_id="batch-1", owner_id=7, account_ids=None, material_ids=(11,), window_hours=1):
         async with self.maker() as session:
+            # 不绕过生产素材归属校验；不同 owner 使用独立素材主键。
+            mids = [mid if owner_id == 7 else mid + 10000 for mid in material_ids]
+            for mid in set(mids):
+                if await session.get(self.Material, mid) is None:
+                    session.add(self.Material(id=mid, user_id=owner_id, title=f"素材{mid}", description="离线素材", price=1))
+            await session.commit()
             return await self.Service(session).create_batch(
                 owner_id=owner_id, account_ids=account_ids or ["acct", "acct"], batch_id=batch_id,
-                materials=[{"id": mid, "title": f"素材{mid}", "description": "离线素材", "price": 1} for mid in material_ids],
+                materials=[{"id": mid, "title": f"素材{mid}", "description": "离线素材", "price": 1} for mid in mids],
+                window_hours=window_hours,
             )
+
+    async def start_request(self, kwargs):
+        async with kwargs["request_guard"]():
+            pass
 
     async def rows(self, model):
         async with self.maker() as session:
@@ -98,12 +119,19 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
     async def expire(self, target_id):
         async with self.maker() as session:
             target = await session.get(self.Target, target_id)
-            target.lease_expires_at = self.module.get_beijing_now_naive() - timedelta(seconds=1)
+            target.lease_expires_at = self.now - timedelta(seconds=1)
             await session.commit()
 
     async def run_result(self, result, batch_id="batch-1"):
+        pending = [t for t in await self.rows(self.Target) if t.batch_id == batch_id and t.status == "pending"]
+        if pending:
+            target = pending[0]
+            schedule = next(s for s in await self.rows(self.Schedule) if s.internal_product_id == target.internal_product_id)
+            self.now = max(self.now, target.available_at)
+            if schedule.last_request_started_at:
+                self.now = max(self.now, schedule.last_request_started_at + timedelta(seconds=target.minimum_gap_seconds))
         async def execute(**kwargs):
-            await kwargs["before_publish"]()
+            await self.start_request(kwargs)
             return result
         self.execute.side_effect = execute
         await self.Service.run_batch(batch_id)
@@ -127,7 +155,7 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
             log, = await self.rows(self.Log)
             attempt, = await self.rows(self.Attempt)
             self.assertEqual((log.id, log.status, attempt.publish_log_id, attempt.attempt_no), (kwargs["prepared_log_id"], "pending", log.id, 1))
-            await kwargs["before_publish"]()
+            await self.start_request(kwargs)
             log, = await self.rows(self.Log)
             self.assertEqual(log.status, "publishing")
             return {"success": True, "item_id": "item-11", "sync_status": "success", "sync_total_count": 2, "sync_saved_count": 2}
@@ -146,6 +174,30 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
         await self.Service.run_batch("batch-1")
         self.execute.assert_awaited_once()
 
+    async def test_late_success_is_reported_without_becoming_retryable(self):
+        await self.create()
+
+        async def execute(**kwargs):
+            await self.start_request(kwargs)
+            self.now += timedelta(hours=2)
+            return {"success": True, "item_id": "late-item"}
+
+        self.execute.side_effect = execute
+        await self.Service.run_batch("batch-1")
+        target, = await self.rows(self.Target)
+        attempt, = await self.rows(self.Attempt)
+        self.assertEqual(target.status, "success")
+        self.assertIn("超过排程窗口", target.schedule_error)
+        self.assertEqual(attempt.schedule_error, target.schedule_error)
+        self.assertEqual(target.finished_at, self.now)
+        async with self.maker() as session:
+            status = await self.Service.get_status(session, 7, "batch-1")
+            self.assertEqual(status["timed_out"], 1)
+            with self.assertRaises(ValueError):
+                await self.Service(session).retry_failed(7, "batch-1", [target.id], window_hours=1)
+        await self.Service.run_batch("batch-1")
+        self.execute.assert_awaited_once()
+
     async def test_success_result_backfills_log_item_id(self):
         await self.create()
         await self.run_result({"success": True, "item_id": "returned-item"})
@@ -156,7 +208,7 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
         await self.create()
 
         async def execute(**kwargs):
-            await kwargs["before_publish"]()
+            await self.start_request(kwargs)
             raise RuntimeError("模拟请求提交后断线")
 
         self.execute.side_effect = execute
@@ -177,7 +229,7 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
         await self.create()
 
         async def execute(**kwargs):
-            await kwargs["before_publish"]()
+            await self.start_request(kwargs)
             async with self.maker() as session:
                 log = await session.get(self.Log, kwargs["prepared_log_id"])
                 log.status, log.item_id = "success", "confirmed-item"
@@ -202,7 +254,7 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
         old_attempt, = await self.rows(self.Attempt)
         target, = await self.rows(self.Target)
         async with self.maker() as session:
-            self.assertEqual(await self.Service(session).retry_failed(7, "batch-1", [target.id, target.id]), 1)
+            self.assertEqual(await self.Service(session).retry_failed(7, "batch-1", [target.id, target.id], window_hours=1), 1)
         pending, = await self.rows(self.Target)
         self.assertEqual((pending.status, pending.attempt_count, pending.publish_log_id), ("pending", 1, None))
         log, = await self.rows(self.Log)
@@ -231,7 +283,7 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
                 target = next(t for t in await self.rows(self.Target) if t.batch_id == status)
                 async with self.maker() as session:
                     with self.assertRaisesRegex(ValueError, "只能重试"):
-                        await self.Service(session).retry_failed(7, status, [target.id])
+                        await self.Service(session).retry_failed(7, status, [target.id], window_hours=1)
                 current = next(t for t in await self.rows(self.Target) if t.id == target.id)
                 self.assertEqual((current.status, current.publish_log_id, current.attempt_count), (status, target.publish_log_id, 1))
 
@@ -255,7 +307,7 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
             listing = await service.list_batches(8, 1, 20)
             self.assertEqual((listing["total"], [b["batch_id"] for b in listing["list"]]), (1, ["foreign"]))
             with self.assertRaisesRegex(ValueError, "无权"):
-                await service.retry_failed(8, "batch-1", [target.id])
+                await service.retry_failed(8, "batch-1", [target.id], window_hours=1)
         self.assertEqual((await self.rows(self.Target))[0].status, "failed")
 
     async def test_cross_batch_and_mixed_target_retry_are_atomic(self):
@@ -267,7 +319,7 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(ids=ids):
                 async with self.maker() as session:
                     with self.assertRaises(ValueError):
-                        await self.Service(session).retry_failed(7, "batch-1", ids)
+                        await self.Service(session).retry_failed(7, "batch-1", ids, window_hours=1)
                 self.assertEqual([t.status for t in await self.rows(self.Target)], ["failed", "failed"])
 
     async def test_valid_lease_is_not_recovered(self):
@@ -290,7 +342,7 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
             target, = await self.rows(self.Target)
             await self.expire(target.id)
             try:
-                await kwargs["before_publish"]()
+                await self.start_request(kwargs)
             except RuntimeError as exc:
                 errors.append(str(exc))
                 raise
@@ -320,7 +372,7 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
 
         async def execute(**kwargs):
             try:
-                await kwargs["before_publish"]()
+                await self.start_request(kwargs)
                 started.set()
                 await asyncio.Event().wait()
             finally:
@@ -360,7 +412,7 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
         started, cancelled = asyncio.Event(), asyncio.Event()
 
         async def execute(**kwargs):
-            await kwargs["before_publish"]()
+            await self.start_request(kwargs)
             started.set()
             try:
                 await asyncio.Event().wait()
@@ -382,21 +434,19 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_attempt_timeout_releases_worker_but_never_replays_request(self):
         await self.create()
-        cancelled = asyncio.Event()
+        cancelled, started = asyncio.Event(), asyncio.Event()
 
         async def execute(**kwargs):
-            await kwargs["before_publish"]()
+            await self.start_request(kwargs)
+            started.set()
             try:
                 await asyncio.Event().wait()
             finally:
                 cancelled.set()
 
-        real_wait = asyncio.wait
-
         async def expired_wait(tasks, **kwargs):
-            # Wait until the simulated request has started, then force the deadline.
-            while (await self.rows(self.Log))[0].status != "publishing":
-                await real_wait(tasks, timeout=0.01)
+            # guard 事务及释放均已完成，再模拟执行超时，避免取消 SQLite 建连。
+            await started.wait()
             return set(), tasks
 
         self.execute.side_effect = execute
@@ -479,6 +529,397 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.Service.recover_interrupted_targets(), 0)
         self.assertIsNone(await self.Service.find_next_batch())
         self.execute.assert_not_awaited()
+
+    async def test_all_windows_plan_per_product_and_reuse_identity(self):
+        from common.utils.batch_schedule import plan_product_offsets
+        self.offsets.side_effect = plan_product_offsets
+        async with self.maker() as session:
+            session.add_all([self.XYAccount(owner_id=7, account_id=f"a{i}", cookie="offline", login_method="cookie") for i in range(4)])
+            await session.commit()
+        for hours in (1, 3, 5, 12, 24):
+            batch = await self.create(str(hours), account_ids=["acct", "a0", "a1", "a2", "a3"], material_ids=(11, 12), window_hours=hours)
+            targets = [t for t in await self.rows(self.Target) if t.batch_id == batch.id]
+            self.assertEqual(batch.deadline_at - batch.window_started_at, timedelta(hours=hours))
+            for mid in (11, 12):
+                group = [t for t in targets if t.material_id == mid]
+                self.assertEqual(len({t.internal_product_id for t in group}), 1)
+                plans = sorted(t.scheduled_at for t in group)
+                self.assertTrue(all(b - a >= timedelta(seconds=hours * 360) for a, b in zip(plans, plans[1:])))
+                self.assertTrue(all(t.window_started_at == batch.window_started_at and t.minimum_gap_seconds == hours * 360 for t in group))
+                self.assertTrue(all(batch.window_started_at <= t.scheduled_at <= batch.deadline_at for t in group))
+        self.assertEqual(len(await self.rows(self.Product)), 2)
+        self.assertEqual(len(await self.rows(self.Schedule)), 2)
+        self.assertIsNone(await self.Service.find_next_batch())
+        self.execute.assert_not_awaited()
+
+    def test_api_window_schema_requires_explicit_supported_value(self):
+        import ast
+        from pydantic import BaseModel, Field, ValidationError
+        from typing import List, Literal
+        source = ast.parse((ROOT / "backend-web/app/api/routes/product_publish.py").read_text(encoding="utf-8-sig"))
+        definitions = [node for node in source.body if isinstance(node, ast.ClassDef) and node.name in {"BatchPublishRequest", "BatchRetryRequest"}]
+        namespace = {"BaseModel": BaseModel, "Field": Field, "List": List, "Literal": Literal}
+        exec(compile(ast.Module(body=definitions, type_ignores=[]), "batch_schema", "exec"), namespace)
+        for name, payload in (("BatchPublishRequest", {"account_ids": ["acct"], "material_ids": [11]}), ("BatchRetryRequest", {"target_ids": [1]})):
+            schema = namespace[name]
+            schema.model_rebuild(_types_namespace=namespace)
+            with self.assertRaises(ValidationError):
+                schema(**payload)
+            for invalid in (None, 2, 6, 0, 48):
+                with self.assertRaises(ValidationError):
+                    schema(**payload, window_hours=invalid)
+            for hours in (1, 3, 5, 12, 24):
+                self.assertEqual(schema(**payload, window_hours=hours).window_hours, hours)
+
+    async def test_explicit_window_and_material_ownership_are_required(self):
+        for value in (None, 0, 2, 6, "1"):
+            with self.assertRaises(ValueError):
+                await self.create(window_hours=value)
+        async with self.maker() as session:
+            with self.assertRaises(TypeError):
+                await self.Service(session).create_batch(owner_id=7, account_ids=["acct"], materials=[{"id": 11}], batch_id="missing")
+            with self.assertRaises(ValueError):
+                await self.Service(session).create_batch(owner_id=7, account_ids=["acct"], materials=[{"id": 99999}], batch_id="missing", window_hours=1)
+        self.assertEqual(await self.rows(self.Target), [])
+
+    async def test_product_guard_coordinates_batches_without_blocking_other_products(self):
+        await self.create("one")
+        await self.create("two")
+        await self.create("different", material_ids=(12,))
+        first = await self.Service._claim_next_target("one")
+        second = await self.Service._claim_next_target("two")
+        different = await self.Service._claim_next_target("different")
+        async with self.Service._request_guard(first):
+            with self.assertRaises(self.module.PublishScheduleDeferred) as caught:
+                async with self.Service._request_guard(second):
+                    self.fail("同商品不得并发请求")
+            self.assertEqual(caught.exception.retry_at, self.now + timedelta(seconds=1800))
+            async with self.Service._request_guard(different):
+                pass
+            schedule = (await self.rows(self.Schedule))[0]
+            self.assertEqual((schedule.lease_target_id, schedule.last_request_started_at), (first["target_id"], self.now))
+        schedule = (await self.rows(self.Schedule))[0]
+        self.assertIsNone(schedule.lease_token)
+        self.assertIsNone(schedule.lease_expires_at)
+        with self.assertRaises(self.module.PublishScheduleDeferred):
+            async with self.Service._request_guard(second):
+                pass
+        self.now += timedelta(seconds=1800)
+        async with self.maker() as session:
+            row = await session.get(self.Target, second["target_id"])
+            row.lease_expires_at = self.now + timedelta(seconds=120)
+            await session.commit()
+        async with self.Service._request_guard(second):
+            pass
+        target = (await self.rows(self.Target))[1]
+        attempt = (await self.rows(self.Attempt))[1]
+        self.assertEqual((target.request_started_at, attempt.request_started_at), (self.now, self.now))
+        self.assertEqual(target.scheduled_at, first["scheduled_at"])
+
+    async def test_deferred_attempt_releases_capacity_and_uses_new_log(self):
+        await self.create("one")
+        await self.create("two")
+        await self.run_result({"success": True, "item_id": "first"}, "one")
+        original = (await self.rows(self.Target))[1].scheduled_at
+        async def execute(**kwargs):
+            async with kwargs["request_guard"]():
+                return {"success": True, "item_id": "second"}
+        self.execute.side_effect = execute
+        self.settle.reset_mock()
+        await self.Service.run_batch("two")
+        target = (await self.rows(self.Target))[1]
+        attempt = (await self.rows(self.Attempt))[1]
+        log = (await self.rows(self.Log))[1]
+        self.assertEqual((target.status, attempt.status, log.status), ("pending", "deferred", "failed"))
+        self.assertEqual(target.scheduled_at, original)
+        self.assertEqual(target.available_at, self.now + timedelta(seconds=1800))
+        self.assertIsNone(target.publish_log_id)
+        self.assertIsNone(target.request_started_at)
+        self.settle.assert_awaited_once()
+        self.assertEqual(self.settle.await_args.args, (log.id, "failed"))
+        self.assertIsNone(await self.Service.find_next_batch())
+        async with self.maker() as session:
+            details = await self.Service(session).list_targets(7, "two", 1, 20)
+            self.assertEqual(details["list"][0]["attempts"][0]["status"], "deferred")
+        self.now = target.available_at
+        await self.Service.run_batch("two")
+        target = (await self.rows(self.Target))[1]
+        self.assertEqual((target.status, target.attempt_count), ("success", 2))
+        self.assertNotEqual(target.publish_log_id, log.id)
+        self.assertEqual(target.scheduled_at, original)
+
+    async def test_delayed_start_beyond_deadline_fails_without_request(self):
+        await self.create("one")
+        await self.create("two")
+        self.now += timedelta(minutes=50)
+        await self.run_result({"success": True, "item_id": "first"}, "one")
+        requests = AsyncMock()
+        async def execute(**kwargs):
+            async with kwargs["request_guard"]():
+                await requests()
+        self.execute.side_effect = execute
+        await self.Service.run_batch("two")
+        target = (await self.rows(self.Target))[1]
+        attempt = (await self.rows(self.Attempt))[1]
+        self.assertEqual((target.status, attempt.status), ("failed", "failed"))
+        self.assertIn("窗口", target.schedule_error)
+        self.assertIsNone(target.request_started_at)
+        requests.assert_not_awaited()
+        async with self.maker() as session:
+            status = await self.Service.get_status(session, 7, "two")
+        self.assertEqual((status["timed_out"], status["finished"]), (1, True))
+
+    async def test_restart_expires_pending_even_if_available_time_is_later(self):
+        await self.create(material_ids=(11, 12))
+        async with self.maker() as session:
+            targets = (await session.scalars(select(self.Target))).all()
+            for target in targets:
+                target.available_at = self.now + timedelta(days=2)
+            schedule = (await session.scalars(select(self.Schedule))).first()
+            schedule.lease_token, schedule.lease_target_id = "crashed", targets[0].id
+            schedule.lease_expires_at = self.now + timedelta(seconds=90)
+            await session.commit()
+        self.now += timedelta(hours=2)
+        self.assertEqual(await self.Service.expire_pending_targets(), 2)
+        self.assertEqual([t.status for t in await self.rows(self.Target)], ["failed", "failed"])
+        self.assertEqual([a.status for a in await self.rows(self.Attempt)], ["failed", "failed"])
+        self.assertIsNone((await self.rows(self.Schedule))[0].lease_token)
+        async with self.maker() as session:
+            data = await self.Service.get_status(session, 7, "batch-1")
+        self.assertEqual((data["timed_out"], data["finished"], data["status"]), (2, True, "failed"))
+        self.execute.assert_not_awaited()
+        self.assertEqual(await self.Service.expire_pending_targets(), 0)
+
+    async def test_retry_opens_new_window_only_for_selected_failure(self):
+        await self.create(material_ids=(11, 12))
+        await self.run_result({"success": False, "message": "明确失败"})
+        await self.run_result({"success": False, "message": "明确失败"})
+        first, second = await self.rows(self.Target)
+        old_attempts = await self.rows(self.Attempt)
+        self.now += timedelta(days=1)
+        async with self.maker() as session:
+            count = await self.Service(session).retry_failed(7, "batch-1", [first.id], window_hours=3)
+        current, untouched = await self.rows(self.Target)
+        self.assertEqual(count, 1)
+        self.assertEqual((current.window_hours, current.window_started_at, current.deadline_at), (3, self.now, self.now + timedelta(hours=3)))
+        self.assertEqual(current.minimum_gap_seconds, 5400)
+        self.assertEqual((untouched.status, untouched.window_started_at, untouched.scheduled_at), ("failed", second.window_started_at, second.scheduled_at))
+        self.assertEqual((await self.rows(self.Attempt))[0].window_started_at, old_attempts[0].window_started_at)
+        self.assertIsNone(current.request_started_at)
+
+    async def test_real_executor_deferred_releases_real_capacity_and_preserves_history(self):
+        from unittest.mock import Mock
+        from common.models.publish_capacity_reservation import PublishCapacityReservation
+        from common.models.internal_product import InternalProductListing
+        async with self.engine.begin() as conn:
+            await conn.run_sync(lambda sync: self.Base.metadata.create_all(sync, tables=[PublishCapacityReservation.__table__, InternalProductListing.__table__]))
+        self.enterContext(patch.object(sys.modules["common.db.session"], "async_session_maker", self.maker))
+        for name, attrs in {
+            "common.services.item_service": {"ItemService": Mock()},
+            "common.services.publish_address_service": {"PublishAddressService": Mock()},
+            "common.services.xianyu_publish_service": {
+                "detect_publish_account_capability": AsyncMock(return_value={"success": True, "is_fish_shop": True}),
+                "ensure_publish_capability_reliable": lambda value: value,
+                "publish_single_item": AsyncMock(), "publish_personal_single_item": AsyncMock(),
+            },
+        }.items():
+            stub = types.ModuleType(name)
+            stub.__dict__.update(attrs)
+            self.enterContext(patch.dict(sys.modules, {name: stub}))
+        spec = importlib.util.spec_from_file_location("common.services.publish_capacity_service", ROOT / "common/services/publish_capacity_service.py")
+        capacity = importlib.util.module_from_spec(spec)
+        self.enterContext(patch.dict(sys.modules, {spec.name: capacity}))
+        spec.loader.exec_module(capacity)
+        spec = importlib.util.spec_from_file_location("_schedule_real_executor", ROOT / "common/services/publish_execution_service.py")
+        executor = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(executor)
+        address = types.SimpleNamespace(apply_to_item_data=lambda data: data, to_log_fields=lambda: {})
+        executor.PublishAddressService = Mock(return_value=types.SimpleNamespace(resolve_publish_address=AsyncMock(return_value=address)))
+        executor._sync_account_items_after_publish = AsyncMock(side_effect=RuntimeError("成功后的同步失败"))
+        self.enterContext(patch.object(self.module, "execute_single_publish", executor.execute_single_publish))
+        self.enterContext(patch.object(self.module, "settle_publish_capacity", capacity.settle_publish_capacity))
+        calls = []
+        async def publish(**kwargs):
+            async with kwargs["request_guard"]():
+                calls.append(self.now)
+            return {"success": True, "item_id": f"item-{len(calls)}"}
+        executor.publish_single_item.side_effect = publish
+        async with self.maker() as session:
+            account = (await session.scalars(select(self.XYAccount).where(self.XYAccount.owner_id == 7))).one()
+            account.remaining_publish_capacity = 3
+            await session.commit()
+        await self.create("one")
+        await self.create("two")
+        await self.Service.run_batch("one")
+        await self.Service.run_batch("two")
+        first, second = await self.rows(self.Target)
+        self.assertEqual((first.status, second.status), ("success", "pending"))
+        self.assertEqual(len(calls), 1)
+        reservations = await self.rows(PublishCapacityReservation)
+        self.assertEqual(sorted(r.status for r in reservations), ["released", "succeeded"])
+        account = (await self.rows(self.XYAccount))[0]
+        self.assertEqual((account.remaining_publish_capacity, account.reserved_publish_count), (2, 0))
+        self.now = second.available_at
+        await self.Service.run_batch("two")
+        account = (await self.rows(self.XYAccount))[0]
+        self.assertEqual((account.remaining_publish_capacity, account.reserved_publish_count), (1, 0))
+        self.assertEqual([t.status for t in await self.rows(self.Target)], ["success", "success"])
+        self.assertEqual([a.status for a in await self.rows(self.Attempt)], ["success", "deferred", "success"])
+        self.assertEqual(len(calls), 2)
+
+    async def test_product_lease_renews_and_cancellation_clears_it(self):
+        await self.create()
+        claimed = await self.Service._claim_next_target("batch-1")
+        entered = asyncio.Event()
+        async def request():
+            async with self.Service._request_guard(claimed):
+                entered.set()
+                await asyncio.Event().wait()
+        task = asyncio.create_task(request())
+        try:
+            await entered.wait()
+            self.now += timedelta(seconds=20)
+            await self.Service._renew(claimed)
+            schedule, = await self.rows(self.Schedule)
+            self.assertEqual(schedule.lease_expires_at, self.now + timedelta(seconds=self.module.PRODUCT_LEASE_SECONDS))
+        finally:
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        schedule, = await self.rows(self.Schedule)
+        self.assertIsNone(schedule.lease_token)
+        self.assertIsNotNone(schedule.last_request_started_at)
+
+    async def test_future_plan_is_not_claimed_and_guard_rechecks_it(self):
+        self.offsets.side_effect = lambda n, t: (300,) * n
+        await self.create()
+        self.assertIsNone(await self.Service.find_next_batch())
+        self.assertIsNone(await self.Service._claim_next_target("batch-1"))
+        self.now += timedelta(seconds=300)
+        claimed = await self.Service._claim_next_target("batch-1")
+        async with self.maker() as session:
+            target = await session.get(self.Target, claimed["target_id"])
+            target.scheduled_at = self.now + timedelta(seconds=30)
+            await session.commit()
+        with self.assertRaises(self.module.PublishScheduleDeferred) as caught:
+            async with self.Service._request_guard(claimed):
+                self.fail("计划之前不得发布")
+        self.assertEqual(caught.exception.retry_at, self.now + timedelta(seconds=30))
+        self.assertIsNone((await self.rows(self.Target))[0].request_started_at)
+        self.assertEqual((await self.rows(self.Log))[0].status, "pending")
+
+    async def test_guard_exit_releases_lease_after_exception_and_blocks_duplicate(self):
+        await self.create()
+        claimed = await self.Service._claim_next_target("batch-1")
+        with self.assertRaisesRegex(RuntimeError, "请求失败"):
+            async with self.Service._request_guard(claimed):
+                raise RuntimeError("请求失败")
+        self.assertIsNone((await self.rows(self.Schedule))[0].lease_token)
+        with self.assertRaisesRegex(RuntimeError, "禁止重复请求"):
+            async with self.Service._request_guard(claimed):
+                pass
+
+    async def test_post_release_heartbeat_renewal_does_not_fail_confirmed_publish(self):
+        """商品租约只在最终请求边界内有效，释放后的心跳续约不能中断已确认的发布。
+
+        回归点：guard 释放商品租约后，若 `product_lease_active` 未复位，心跳仍会尝试
+        续约已释放的商品租约并抛出执行权失效；run_batch 会因此取消仍在进行中的
+        发布后同步，把平台已成功的发布收尾成 unknown。
+        """
+        await self.create()
+        guard_released, post_request = asyncio.Event(), asyncio.Event()
+
+        async def execute(**kwargs):
+            async with kwargs["request_guard"]():
+                pass
+            # 平台请求已发起，进入耗时较长的发布后同步。
+            guard_released.set()
+            await post_request.wait()
+            return {"success": True, "item_id": "confirmed-item"}
+
+        async def heartbeat(target):
+            await guard_released.wait()
+            # 真实心跳按 HEARTBEAT_SECONDS 独立调度，此时 guard 已释放商品租约。
+            await self.Service._renew(target)
+            post_request.set()
+
+        self.execute.side_effect = execute
+        with patch.object(self.Service, "_heartbeat", side_effect=heartbeat):
+            await asyncio.wait_for(self.Service.run_batch("batch-1"), 5)
+
+        target, = await self.rows(self.Target)
+        log, = await self.rows(self.Log)
+        attempt, = await self.rows(self.Attempt)
+        self.assertEqual((target.status, log.status, attempt.status), ("success",) * 3)
+        self.assertEqual(target.error_message, None)
+        self.assertEqual((target.lease_token, target.lease_expires_at), (None, None))
+        self.assertEqual((await self.rows(self.Schedule))[0].lease_token, None)
+        self.settle.assert_awaited_once_with(log.id, "success", item_id="confirmed-item", error_message=None)
+
+    async def test_product_lease_flag_blocks_renewal_only_while_guard_holds_lease(self):
+        """复位标志必须精确跟随商品租约的持有区间（不是简单放宽校验）。"""
+        await self.create()
+        claimed = await self.Service._claim_next_target("batch-1")
+
+        async with self.Service._request_guard(claimed):
+            schedule, = await self.rows(self.Schedule)
+            self.assertEqual(schedule.lease_target_id, claimed["target_id"])
+            self.assertIsNotNone(schedule.lease_token)
+            self.assertTrue(claimed["product_lease_active"])
+            # 持有期间心跳必须同时续商品租约，否则长请求会丢掉商品级协调。
+            self.now += timedelta(seconds=20)
+            await self.Service._renew(claimed)
+            schedule, = await self.rows(self.Schedule)
+            self.assertEqual(
+                schedule.lease_expires_at,
+                self.now + timedelta(seconds=self.module.PRODUCT_LEASE_SECONDS),
+            )
+
+        # 释放后标志必须复位，心跳只续目标租约。
+        self.assertFalse(claimed["product_lease_active"])
+        await self.Service._renew(claimed)
+        self.assertIsNone((await self.rows(self.Schedule))[0].lease_token)
+
+        # 反向确认：标志仍为 True 时续约确实会失败，证明该复位是必要保护而非放宽校验。
+        claimed["product_lease_active"] = True
+        with self.assertRaisesRegex(RuntimeError, "商品发布执行权已失效"):
+            await self.Service._renew(claimed)
+        self.assertEqual((await self.rows(self.Target))[0].lease_token, claimed["token"])
+
+    async def test_late_failed_result_keeps_failure_retryable_and_flags_window_overrun(self):
+        """超窗收尾用数据库时间判定；明确失败仍可重试，不因超窗被降级或升级。"""
+        await self.create()
+        self.assertGreaterEqual(self.now + timedelta(hours=1), self.now)
+        async with self.maker() as session:
+            target_before = (await session.scalars(select(self.Target))).one()
+            deadline = target_before.deadline_at
+
+        async def execute(**kwargs):
+            async with kwargs["request_guard"]():
+                pass
+            # 平台明确拒绝；收尾发生在排程窗口之后（含后处理时间）。
+            self.now = deadline + timedelta(minutes=5)
+            return {"success": False, "message": "明确失败"}
+
+        self.execute.side_effect = execute
+        await self.Service.run_batch("batch-1")
+        target, = await self.rows(self.Target)
+        attempt, = await self.rows(self.Attempt)
+        self.assertEqual(target.status, "failed")
+        # finished_at 取数据库时间（测试内被固定为 self.now），而非进程本地时钟。
+        self.assertEqual(target.finished_at, self.now)
+        self.assertIn("结果收尾超过排程窗口", target.schedule_error)
+        self.assertEqual(attempt.schedule_error, target.schedule_error)
+        self.assertEqual(target.error_message, "明确失败")
+        async with self.maker() as session:
+            status = await self.Service.get_status(session, 7, "batch-1")
+            self.assertEqual((status["timed_out"], status["finished"]), (1, True))
+            # 明确失败项即使超窗也必须仍可重试（只重试失败项的既有约束不受影响）。
+            self.assertEqual(await self.Service(session).retry_failed(7, "batch-1", [target.id], window_hours=1), 1)
+        pending, = await self.rows(self.Target)
+        self.assertEqual((pending.status, pending.attempt_count), ("pending", 1))
+        self.assertEqual([a.status for a in await self.rows(self.Attempt)], ["failed"])
+        self.assertEqual(self.execute.await_count, 1)
 
 
 if __name__ == "__main__":

@@ -11,8 +11,9 @@ import { useAuthStore } from '@/stores/auth';
 import { useConfigStore } from '@/stores/config';
 import { getAccountOptions, getAccountDetailsPaginated, type AccountOption } from '@/api/wrappers/accounts';
 import {
-  getPublishMaterials, publishBatch, getBatchPublishProgress, PublishBatchUnavailableError,
-  type PublishMaterialOption, type BatchPublishProgress,
+  getPublishMaterials, publishBatch, getBatchPublishProgress, getBatchPublishTargets, retryPublishBatch,
+  PublishBatchUnavailableError,
+  type PublishMaterialOption, type BatchPublishProgress, type PublishBatchTarget, type PublishWindowHours,
 } from '@/api/wrappers/product-publish';
 
 type BatchRecord = {
@@ -22,20 +23,25 @@ type BatchRecord = {
   materialIds: number[];
   startedAt?: string;
   progress?: BatchPublishProgress;
+  windowHours?: PublishWindowHours;
+  retryTargetIds?: number[];
 };
 
 const POLL_INTERVAL_MS = 3000;
 const MATERIAL_PAGE_SIZE = 100;
 
 export default function ProductPublishScreen() {
+  const userId = useAuthStore((state) => state.user?.user_id);
+  const serverUrl = useConfigStore((state) => state.serverUrl);
+  if (userId == null || !serverUrl) return null;
+  return <ProductPublishContent key={JSON.stringify([serverUrl, userId])} userId={userId} serverUrl={serverUrl} />;
+}
+
+function ProductPublishContent({ userId, serverUrl }: { userId: number; serverUrl: string }) {
   const scheme = useColorScheme();
   const c = colors[scheme === 'dark' ? 'dark' : 'light'];
-  const userId = useAuthStore((state) => state.user?.user_id);
   const isAdmin = useAuthStore((state) => state.user?.is_admin);
-  const serverUrl = useConfigStore((state) => state.serverUrl);
-  const storageKey = serverUrl && userId != null
-    ? 'publish_batch:' + encodeURIComponent(serverUrl) + ':' + userId
-    : null;
+  const storageKey = 'publish_batch:' + encodeURIComponent(serverUrl) + ':' + userId;
 
   const [accounts, setAccounts] = useState<AccountOption[]>([]);
   const [materials, setMaterials] = useState<PublishMaterialOption[]>([]);
@@ -43,23 +49,53 @@ export default function ProductPublishScreen() {
   const [materialTotal, setMaterialTotal] = useState(0);
   const [selectedAccounts, setSelectedAccounts] = useState<Set<string>>(new Set());
   const [selectedMaterials, setSelectedMaterials] = useState<Set<number>>(new Set());
+  const [windowHours, setWindowHours] = useState<PublishWindowHours | null>(null);
   const [loading, setLoading] = useState(true);
   const [restored, setRestored] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [moreLoading, setMoreLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [statusError, setStatusError] = useState('');
   const [record, setRecord] = useState<BatchRecord | null>(null);
   const [progress, setProgress] = useState<BatchPublishProgress | null>(null);
+  const [targets, setTargets] = useState<PublishBatchTarget[]>([]);
+  const [targetPage, setTargetPage] = useState(1);
+  const [targetTotal, setTargetTotal] = useState(0);
+  const [selectedRetryTargetIds, setSelectedRetryTargetIds] = useState<Set<number>>(new Set());
+  const [retryWindowHours, setRetryWindowHours] = useState<PublishWindowHours | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const targetPageRef = useRef(1);
+  const targetStatusRef = useRef(new Map<number, string>());
+  const detailLoadingRef = useRef(false);
   const submittingRef = useRef(false);
   const checkingRef = useRef(false);
+  const retryingRef = useRef(false);
+  const statusGenerationRef = useRef(0);
+  const detailGenerationRef = useRef(0);
+  const clearGenerationRef = useRef(0);
+  const clearingRef = useRef(false);
+  const storageOperationRef = useRef(Promise.resolve());
 
   const persistRecord = useCallback(async (next: BatchRecord) => {
     if (!storageKey) throw new Error('登录状态尚未就绪');
-    await AsyncStorage.setItem(storageKey, JSON.stringify(next));
-    setRecord(next);
+    const generation = clearGenerationRef.current;
+    if (clearingRef.current) throw new Error('批次记录正在清除');
+    const operation = storageOperationRef.current.then(async () => {
+      if (generation !== clearGenerationRef.current || clearingRef.current) {
+        throw new Error('批次记录已清除');
+      }
+      await AsyncStorage.setItem(storageKey, JSON.stringify(next));
+      if (generation !== clearGenerationRef.current || clearingRef.current) {
+        throw new Error('批次记录已清除');
+      }
+      setRecord(next);
+    });
+    storageOperationRef.current = operation.then(() => undefined, () => undefined);
+    await operation;
   }, [storageKey]);
 
   const loadOptions = useCallback(async () => {
@@ -114,9 +150,13 @@ export default function ProductPublishScreen() {
     setRecord(null);
     setProgress(null);
     setAccounts([]);
-    setMaterials([]);
-    setSelectedAccounts(new Set());
-    setSelectedMaterials(new Set());
+    setTargets([]);
+    setTargetPage(1);
+    targetPageRef.current = 1;
+    targetStatusRef.current.clear();
+    setTargetTotal(0);
+    setSelectedRetryTargetIds(new Set());
+    setRetryWindowHours(null);
     setLoading(true);
     void (async () => {
       try {
@@ -156,16 +196,51 @@ export default function ProductPublishScreen() {
     }
   };
 
+  const requestDetails = useCallback(async (batchId: string, page: number) => {
+    if (clearingRef.current) return;
+    const clearGeneration = clearGenerationRef.current;
+    const generation = ++detailGenerationRef.current;
+    detailLoadingRef.current = true;
+    setDetailLoading(true);
+    try {
+      const detail = await getBatchPublishTargets(batchId, page, 20);
+      if (generation !== detailGenerationRef.current || clearGeneration !== clearGenerationRef.current || clearingRef.current) return;
+      setTargets(detail.list);
+      detail.list.forEach((target) => targetStatusRef.current.set(target.id, target.status));
+      setTargetPage(detail.page);
+      targetPageRef.current = detail.page;
+      setTargetTotal(detail.total);
+    } catch (error) {
+      if (generation === detailGenerationRef.current) {
+        setStatusError(error instanceof Error ? error.message : '查询任务详情失败');
+      }
+    } finally {
+      if (generation === detailGenerationRef.current) {
+        detailLoadingRef.current = false;
+        setDetailLoading(false);
+      }
+    }
+  }, []);
+
   useFocusEffect(useCallback(() => {
-    if (!storageKey || !restored || record?.kind !== 'active' || !record.batchId) return;
-    let focused = true;
+    if (!storageKey || !restored || record?.kind === 'uncertain' || !record?.batchId) return;
     const batchId = record.batchId;
+    if (record.kind !== 'active') {
+      void requestDetails(batchId, targetPageRef.current);
+      return () => {
+        ++detailGenerationRef.current;
+        detailLoadingRef.current = false;
+        setDetailLoading(false);
+      };
+    }
     const check = async () => {
       if (checkingRef.current) return;
       checkingRef.current = true;
+      const generation = ++statusGenerationRef.current;
+      setChecking(true);
       try {
         const latest = await getBatchPublishProgress(batchId);
-        if (!focused) return;
+        if (generation !== statusGenerationRef.current) return;
         setProgress(latest);
         setStatusError('');
         if (!latest.snapshot_available) {
@@ -177,21 +252,37 @@ export default function ProductPublishScreen() {
           try { await persistRecord(finished); } catch { setRecord(finished); }
         }
       } catch (error) {
-        if (focused && error instanceof PublishBatchUnavailableError) {
+        if (generation !== statusGenerationRef.current) return;
+        if (error instanceof PublishBatchUnavailableError) {
           const unresolved: BatchRecord = { ...record, kind: 'uncertain' };
           try { await persistRecord(unresolved); } catch { setRecord(unresolved); }
           setStatusError(error.message + '。请核实服务端日志与平台商品。');
-        } else if (focused) {
+        } else {
           setStatusError(error instanceof Error ? error.message : '查询任务状态失败');
         }
       } finally {
-        checkingRef.current = false;
+        if (generation === statusGenerationRef.current) {
+          checkingRef.current = false;
+          setChecking(false);
+        }
       }
     };
     void check();
-    const timer = setInterval(() => { void check(); }, POLL_INTERVAL_MS);
-    return () => { focused = false; clearInterval(timer); };
-  }, [storageKey, restored, record, persistRecord]));
+    void requestDetails(batchId, targetPageRef.current);
+    const timer = setInterval(() => {
+      void check();
+      if (!detailLoadingRef.current) void requestDetails(batchId, targetPageRef.current);
+    }, POLL_INTERVAL_MS);
+    return () => {
+      ++statusGenerationRef.current;
+      ++detailGenerationRef.current;
+      checkingRef.current = false;
+      setChecking(false);
+      detailLoadingRef.current = false;
+      setDetailLoading(false);
+      clearInterval(timer);
+    };
+  }, [storageKey, restored, record, persistRecord, requestDetails]));
 
   const toggleAccount = (id: string) => {
     setSelectedAccounts((current) => {
@@ -208,16 +299,91 @@ export default function ProductPublishScreen() {
     });
   };
 
+  const toggleRetryTarget = (target: PublishBatchTarget) => {
+    if (target.status !== 'failed') return;
+    setSelectedRetryTargetIds((current) => {
+      const next = new Set(current);
+      if (next.has(target.id)) next.delete(target.id); else next.add(target.id);
+      return next;
+    });
+  };
+
+  const retryFailed = async () => {
+    if (!record?.batchId || record.kind !== 'finished' || clearingRef.current || retryingRef.current || retryWindowHours === null) return;
+    const targetIds = Array.from(selectedRetryTargetIds).filter((id) => targetStatusRef.current.get(id) === 'failed');
+    if (!targetIds.length) {
+      setStatusError('请重新加载详情后选择明确失败项。');
+      return;
+    }
+    retryingRef.current = true;
+    setRetrying(true);
+    setStatusError('');
+    const uncertain: BatchRecord = {
+      ...record, kind: 'uncertain', retryTargetIds: targetIds, windowHours: retryWindowHours,
+    };
+    try {
+      // Write before POST: a lost response must leave this batch blocked from blind retry.
+      await persistRecord(uncertain);
+    } catch (error) {
+      setStatusError(error instanceof Error ? error.message : '无法保存重试记录');
+      retryingRef.current = false;
+      setRetrying(false);
+      return;
+    }
+    try {
+      const result = await retryPublishBatch(record.batchId, targetIds, retryWindowHours);
+      if (result.retried !== targetIds.length) {
+        throw new Error('服务端仅受理了部分重试项，结果无法安全确认，请核实日志，勿重复提交');
+      }
+      const active: BatchRecord = { ...uncertain, kind: 'active', retryTargetIds: undefined };
+      await persistRecord(active);
+      setProgress((current) => current ? {
+        ...current,
+        status: 'running',
+        finished: false,
+        window_hours: retryWindowHours,
+      } : current);
+      setSelectedRetryTargetIds(new Set());
+      setRetryWindowHours(null);
+    } catch (error) {
+      setStatusError(error instanceof Error ? error.message : '重试结果无法确认，请先核实服务端日志，勿重复提交');
+    } finally {
+      retryingRef.current = false;
+      setRetrying(false);
+    }
+  };
+
+  const confirmRetry = () => {
+    if (!record?.batchId || record.kind !== 'finished' || clearingRef.current || retryingRef.current || retryWindowHours === null || selectedRetryTargetIds.size === 0) return;
+    Alert.alert(
+      '确认重试失败项',
+      '将重试 ' + selectedRetryTargetIds.size + ' 个明确失败项，窗口：' + retryWindowHours + ' 小时。成功、结果未知和跳过项不会重试。',
+      [
+        { text: '取消', style: 'cancel' },
+        { text: '确认重试', onPress: () => { void retryFailed(); } },
+      ],
+    );
+  };
+
   const submit = async () => {
-    if (submittingRef.current || !storageKey || !restored || record?.kind === 'active' || record?.kind === 'uncertain') return;
+    if (submittingRef.current || clearingRef.current || !storageKey || !restored || record?.kind === 'active' || record?.kind === 'uncertain') return;
     const accountIds = Array.from(selectedAccounts);
     const materialIds = Array.from(selectedMaterials);
-    if (!accountIds.length || !materialIds.length) return;
+    if (!accountIds.length || !materialIds.length || windowHours === null) return;
     submittingRef.current = true;
     setSubmitting(true);
     setStatusError('');
+    ++statusGenerationRef.current;
+    ++detailGenerationRef.current;
+    targetPageRef.current = 1;
+    targetStatusRef.current.clear();
+    setTargets([]);
+    setTargetPage(1);
+    setTargetTotal(0);
+    setSelectedRetryTargetIds(new Set());
+    setRetryWindowHours(null);
     const uncertain: BatchRecord = {
-      kind: 'uncertain', accountIds, materialIds, startedAt: new Date().toLocaleString(),
+      kind: 'uncertain', accountIds, materialIds, windowHours, startedAt: new Date().toLocaleString(),
     };
     try {
       // Write before POST: a lost response or app crash must never offer blind resubmission.
@@ -229,10 +395,14 @@ export default function ProductPublishScreen() {
       return;
     }
     try {
-      const started = await publishBatch(accountIds, materialIds);
+      const started = await publishBatch(accountIds, materialIds, windowHours);
       const active: BatchRecord = { ...uncertain, kind: 'active', batchId: started.batch_id };
       setProgress({
         batch_id: started.batch_id,
+        window_hours: windowHours,
+        window_started_at: null,
+        deadline_at: null,
+        timed_out: 0,
         total: started.total,
         success: 0, failed: 0, unknown: 0, skipped: 0,
         publishing: 0, pending: started.total,
@@ -254,11 +424,11 @@ export default function ProductPublishScreen() {
 
   const confirmSubmit = () => {
     const total = selectedAccounts.size * selectedMaterials.size;
-    if (!total || submittingRef.current) return;
+    if (!total || submittingRef.current || windowHours === null) return;
     Alert.alert(
       '确认批量发布',
       '将向 ' + selectedAccounts.size + ' 个账号发布 ' + selectedMaterials.size
-        + ' 条素材，共 ' + total + ' 次。素材中的宝贝所在地会由随机地址库分配。',
+        + ' 条素材，共 ' + total + ' 次。窗口：' + windowHours + ' 小时。素材中的宝贝所在地会由随机地址库分配。',
       [
         { text: '取消', style: 'cancel' },
         { text: '确认提交', onPress: () => { void submit(); } },
@@ -267,41 +437,87 @@ export default function ProductPublishScreen() {
   };
 
   const retryStatus = async () => {
-    if (!record?.batchId || checking) return;
+    if (!record?.batchId || checkingRef.current || clearingRef.current) return;
+    checkingRef.current = true;
     setChecking(true);
+    const clearGeneration = clearGenerationRef.current;
+    const generation = ++statusGenerationRef.current;
     try {
       const latest = await getBatchPublishProgress(record.batchId);
+      if (generation !== statusGenerationRef.current || clearGeneration !== clearGenerationRef.current || clearingRef.current) return;
       setProgress(latest);
       if (latest.snapshot_available) {
         const next: BatchRecord = {
-          ...record, kind: latest.finished ? 'finished' : 'active', progress: latest,
+          ...record,
+          kind: record.retryTargetIds?.length ? 'uncertain' : latest.finished ? 'finished' : 'active',
+          progress: latest,
         };
-        await persistRecord(next);
-        setStatusError('');
+        try {
+          await persistRecord(next);
+          setStatusError(record.retryTargetIds?.length
+            ? '重试请求结果仍无法确认，请核实服务端日志，勿重复提交。'
+            : '');
+        } catch (error) {
+          setStatusError(error instanceof Error ? error.message : '保存批次状态失败');
+        }
       } else {
         setStatusError('仍只能看到部分日志，无法确认任务完成。');
       }
     } catch (error) {
-      setStatusError(error instanceof Error ? error.message : '查询任务状态失败');
+      if (generation === statusGenerationRef.current) {
+        setStatusError(error instanceof Error ? error.message : '查询任务状态失败');
+      }
     } finally {
-      setChecking(false);
+      if (generation === statusGenerationRef.current) {
+        checkingRef.current = false;
+        setChecking(false);
+      }
     }
+    void requestDetails(record.batchId, targetPageRef.current);
+  };
+
+  const loadTargetPage = async (page: number) => {
+    if (!record?.batchId || detailLoading) return;
+    void requestDetails(record.batchId, page);
   };
 
   const clearRecord = () => {
-    if (!storageKey || record?.kind === 'active') return;
+    if (!storageKey || record?.kind === 'active' || clearingRef.current) return;
     Alert.alert(
       '已核实发布结果？',
       '请先检查发布日志与闲鱼账号。清除本地记录不会取消服务端任务，且可能导致重复发布。',
       [
         { text: '取消', style: 'cancel' },
         { text: '已核实，清除', onPress: () => {
-          void AsyncStorage.removeItem(storageKey).then(() => {
+          const clearGeneration = ++clearGenerationRef.current;
+          clearingRef.current = true;
+          setClearing(true);
+          ++statusGenerationRef.current;
+          ++detailGenerationRef.current;
+          checkingRef.current = false;
+          detailLoadingRef.current = false;
+          targetPageRef.current = 1;
+          targetStatusRef.current.clear();
+          setChecking(false);
+          setDetailLoading(false);
+          setTargets([]);
+          setTargetPage(1);
+          setTargetTotal(0);
+          setSelectedRetryTargetIds(new Set());
+          setRetryWindowHours(null);
+          void storageOperationRef.current.then(async () => {
+            if (clearGeneration !== clearGenerationRef.current) return;
+            await AsyncStorage.removeItem(storageKey);
             setRecord(null);
             setProgress(null);
             setStatusError('');
           }).catch((error) => {
             Alert.alert('清除失败', error instanceof Error ? error.message : '请稍后重试');
+          }).finally(() => {
+            if (clearGeneration === clearGenerationRef.current) {
+              clearingRef.current = false;
+              setClearing(false);
+            }
           });
         } },
       ],
@@ -396,6 +612,14 @@ export default function ProductPublishScreen() {
 
         <Card style={styles.section}>
           <Text style={[styles.heading, { color: c.text }]}>发布计划</Text>
+          <Text style={[styles.caption, { color: c.textSecondary }]}>必须选择窗口，提交不会预选默认值。</Text>
+          <View style={styles.windowRow}>
+            {([1, 3, 5, 12, 24] as PublishWindowHours[]).map((hours) => (
+              <Pressable key={hours} onPress={() => setWindowHours(hours)} style={[styles.windowOption, { borderColor: windowHours === hours ? c.primary : c.border, backgroundColor: windowHours === hours ? c.primaryLight : c.surface }]}>
+                <Text style={[styles.small, { color: windowHours === hours ? c.primary : c.text }]}>{hours} 小时</Text>
+              </Pressable>
+            ))}
+          </View>
           <Text style={[styles.caption, { color: c.textSecondary }]}>
             {selectedAccounts.size} 个账号 × {selectedMaterials.size} 条素材 = {selectedAccounts.size * selectedMaterials.size} 次发布
           </Text>
@@ -403,7 +627,7 @@ export default function ProductPublishScreen() {
             label={record?.kind === 'active' ? '任务进行中' : record?.kind === 'uncertain' ? '请先核实上一批次' : '确认并提交'}
             onPress={confirmSubmit}
             loading={submitting}
-            disabled={blocked || selectedAccounts.size === 0 || selectedMaterials.size === 0}
+            disabled={blocked || clearing || windowHours === null || selectedAccounts.size === 0 || selectedMaterials.size === 0}
           />
         </Card>
 
@@ -425,6 +649,8 @@ export default function ProductPublishScreen() {
             </Text>
             {progress ? (
               <>
+                <Text style={[styles.caption, { color: c.textSecondary }]}>窗口：{progress.window_hours ? progress.window_hours + ' 小时' : '—'} · 开始：{progress.window_started_at || '—'} · 截止：{progress.deadline_at || '—'} · 超时：{progress.timed_out}</Text>
+                {progress.timed_out > 0 ? <Text style={[styles.caption, { color: c.warning }]}>存在超时项目；明确平台成功仍保留超时原因，不伪装为全部按时成功。</Text> : null}
                 <Text style={[styles.caption, { color: c.text }]}>已处理 {completed}/{progress.total} · 发布中 {progress.publishing} · 待处理 {progress.pending}</Text>
                 <Text style={[styles.caption, { color: c.success }]}>成功 {progress.success}</Text>
                 <Text style={[styles.caption, { color: c.error }]}>失败 {progress.failed}</Text>
@@ -435,15 +661,41 @@ export default function ProductPublishScreen() {
                 {!progress.snapshot_available ? (
                   <Text style={[styles.caption, { color: c.warning }]}>仅恢复到部分发布日志，不能据此确认任务结束。</Text>
                 ) : null}
+                {targets.map((target) => {
+                  const retryable = record.kind === 'finished' && target.status === 'failed';
+                  const selectedForRetry = selectedRetryTargetIds.has(target.id);
+                  return (
+                  <View key={target.id} style={[styles.accountProgress, { borderTopColor: c.border }] }>
+                    {retryable ? (
+                      <Pressable
+                        accessibilityRole="checkbox"
+                        accessibilityState={{ checked: selectedForRetry }}
+                        onPress={() => toggleRetryTarget(target)}
+                        style={[styles.option, { borderColor: selectedForRetry ? c.primary : c.border, backgroundColor: selectedForRetry ? c.primaryLight : c.surface }]}
+                      >
+                        <Text style={[styles.check, { color: c.primary }]}>{selectedForRetry ? '☑' : '□'}</Text>
+                        <Text style={[styles.optionTitle, { color: c.text }]}>选择重试：{target.account_id} · {target.title}</Text>
+                      </Pressable>
+                    ) : null}
+                    <Text style={[styles.optionTitle, { color: c.text }]}>{target.account_id} · {target.title}</Text>
+                    <Text style={[styles.small, { color: c.textSecondary }]}>计划 {target.scheduled_at || '—'} · 截止 {target.deadline_at || '—'}</Text>
+                    <Text style={[styles.small, { color: c.textSecondary }]}>请求发起 {target.request_started_at || '—'} · 最小间隔 {target.minimum_gap_seconds} 秒</Text>
+                    {target.schedule_error ? <Text style={[styles.small, { color: c.warning }]}>超时/排程原因：{target.schedule_error}</Text> : null}
+                    {target.error_message ? <Text style={[styles.small, { color: c.warning }]}>{target.error_message}</Text> : null}
+                    {target.attempts.map((attempt) => <Text key={attempt.id} style={[styles.small, { color: c.textMuted }]}>尝试 #{attempt.attempt_no} · {attempt.status} · 计划 {attempt.scheduled_at || '—'} · 截止 {attempt.deadline_at || '—'}{attempt.schedule_error ? ' · ' + attempt.schedule_error : ''}</Text>)}
+                  </View>
+                  );
+                })}
+                {targetTotal > 20 ? <View style={styles.paginationRow}>
+                  <Button label="上一页" variant="secondary" onPress={() => { void loadTargetPage(targetPage - 1); }} disabled={targetPage <= 1 || detailLoading} />
+                  <Text style={[styles.small, { color: c.textMuted }]}>{detailLoading ? '加载中…' : '第 ' + targetPage + ' 页'}</Text>
+                  <Button label="下一页" variant="secondary" onPress={() => { void loadTargetPage(targetPage + 1); }} disabled={targetPage * 20 >= targetTotal || detailLoading} />
+                </View> : null}
                 {progress.account_statuses.map((item) => (
-                  <View key={item.account_id} style={[styles.accountProgress, { borderTopColor: c.border }]}>
+                  <View key={item.account_id} style={[styles.accountProgress, { borderTopColor: c.border }] }>
                     <Text style={[styles.optionTitle, { color: c.text }]}>{item.account_id}</Text>
-                    <Text style={[styles.small, { color: c.textSecondary }]}>
-                      成功 {item.success} · 失败 {item.failed} · 跳过 {item.skipped} · 未知 {item.unknown} · 待处理 {item.pending}
-                    </Text>
-                    <Text style={[styles.small, { color: item.sync_status === 'failed' || item.sync_status === 'unknown' ? c.warning : c.textMuted }]}>
-                      自动获取商品：{item.sync_message}
-                    </Text>
+                    <Text style={[styles.small, { color: c.textSecondary }]}>成功 {item.success} · 失败 {item.failed} · 跳过 {item.skipped} · 未知 {item.unknown} · 待处理 {item.pending}</Text>
+                    <Text style={[styles.small, { color: item.sync_status === 'failed' || item.sync_status === 'unknown' ? c.warning : c.textMuted }]}>自动获取商品：{item.sync_message}</Text>
                   </View>
                 ))}
               </>
@@ -451,6 +703,25 @@ export default function ProductPublishScreen() {
             {statusError ? <Text style={[styles.caption, { color: c.warning }]}>{statusError}</Text> : null}
             {record.kind === 'uncertain' && record.batchId ? (
               <Button label="重新查询任务状态" variant="secondary" onPress={() => { void retryStatus(); }} loading={checking} />
+            ) : null}
+            {record.kind === 'finished' ? (
+              <>
+                <Text style={[styles.caption, { color: c.textSecondary }]}>只可选择明确失败项；成功、结果未知和跳过项不可重试。活动批次不可重试。</Text>
+                <View style={styles.windowRow}>
+                  {([1, 3, 5, 12, 24] as PublishWindowHours[]).map((hours) => (
+                    <Pressable key={hours} onPress={() => setRetryWindowHours(hours)} style={[styles.windowOption, { borderColor: retryWindowHours === hours ? c.primary : c.border, backgroundColor: retryWindowHours === hours ? c.primaryLight : c.surface }]}>
+                      <Text style={[styles.small, { color: retryWindowHours === hours ? c.primary : c.text }]}>{hours} 小时</Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <Button
+                  label="确认并重试失败项"
+                  variant="secondary"
+                  onPress={confirmRetry}
+                  loading={retrying}
+                  disabled={clearing || selectedRetryTargetIds.size === 0 || retryWindowHours === null}
+                />
+              </>
             ) : null}
             {record.kind !== 'active' ? (
               <Button label="已核实，清除批次记录" variant="secondary" onPress={clearRecord} />
@@ -478,4 +749,7 @@ const styles = StyleSheet.create({
   optionBody: { flex: 1, gap: 2 },
   optionTitle: { ...typography.caption, fontWeight: '600' },
   accountProgress: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: spacing.sm, gap: 2 },
+  windowRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  windowOption: { paddingVertical: spacing.sm, paddingHorizontal: spacing.md, borderWidth: 1, borderRadius: radius.md },
+  paginationRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
 });

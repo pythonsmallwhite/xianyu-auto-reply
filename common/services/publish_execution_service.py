@@ -11,7 +11,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from collections.abc import Awaitable, Callable
-from typing import Any, Dict, Optional
+from contextlib import asynccontextmanager
+from typing import Any, AsyncContextManager, Dict, Optional
 
 from loguru import logger
 from sqlalchemy import desc, select
@@ -21,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from common.db.session import async_session_maker
 from common.models.xy_account import XYAccount
 from common.utils.publish_outcome import classify_publish_result
+from common.utils.batch_schedule import PublishScheduleDeferred, PublishWindowExpired
 from common.services.item_service import ItemService
 from common.services.publish_address_service import PublishAddressService
 from common.services.publish_log_service import PublishLogService
@@ -111,6 +113,7 @@ async def execute_single_publish(
     batch_id: str | None = None,
     prepared_log_id: int | None = None,
     before_publish: Callable[[], Awaitable[None]] | None = None,
+    request_guard: Callable[[], AsyncContextManager[None]] | None = None,
 ) -> Dict[str, Any]:
     """执行单品发布并返回统一结果。"""
     log_svc = PublishLogService(session)
@@ -276,6 +279,17 @@ async def execute_single_publish(
     publish_unknown = False
     publish_call_started = False
     refreshed_cookie: str | None = None
+
+    @asynccontextmanager
+    async def guarded_publish_request():
+        nonlocal publish_call_started
+        async with request_guard():
+            if before_publish is not None:
+                await before_publish()
+            publish_call_started = True
+            yield
+
+    publish_options = {"request_guard": guarded_publish_request} if request_guard is not None else {}
     try:
         capability = await detect_publish_account_capability(
             cookie=cookies_str,
@@ -289,15 +303,18 @@ async def execute_single_publish(
             result = capability
         elif capability.get("is_fish_shop"):
             # 鱼小铺账号继续使用已验证稳定的原发布逻辑，不改变任何载荷与接口。
-            if before_publish is not None:
+            # 非 guarded 路径保持 before_publish 的历史时序；guarded 路径由最终请求内部触发。
+            if request_guard is None and before_publish is not None:
                 await before_publish()
-            publish_call_started = True
+            if request_guard is None:
+                publish_call_started = True
             result = await publish_single_item(
                 item_data=publish_item_data,
                 cookie=cookies_str,
                 account_id=account.account_id,
                 owner_id=user_id,
                 static_root=static_root,
+                **publish_options,
             )
         else:
             # 普通卖家单品发布不提供视频能力，后端兜底丢弃绕过前端提交的视频。
@@ -307,15 +324,17 @@ async def execute_single_publish(
                 "quantity": PERSONAL_SELLER_DEFAULT_STOCK,
                 "stock": PERSONAL_SELLER_DEFAULT_STOCK,
             }
-            if before_publish is not None:
+            if request_guard is None and before_publish is not None:
                 await before_publish()
-            publish_call_started = True
+            if request_guard is None:
+                publish_call_started = True
             result = await publish_personal_single_item(
                 item_data=personal_item_data,
                 cookie=cookies_str,
                 account_id=account.account_id,
                 owner_id=user_id,
                 static_root=static_root,
+                **publish_options,
             )
         if result.get("account_invalid"):
             logger.warning(
@@ -330,6 +349,18 @@ async def execute_single_publish(
         publish_unknown = classify_publish_result(
             result, request_started=publish_call_started
         ) == "unknown"
+    except (PublishWindowExpired, PublishScheduleDeferred) as schedule_exc:
+        if publish_call_started:
+            # context 退出阶段的异常不能把已发起的请求变为可自动重试。
+            pub_error, publish_unknown = schedule_exc, True
+        else:
+            message = str(schedule_exc)
+            await log_svc.update_log(log.id, "failed", error_message=message)
+            await settle_publish_capacity(log.id, "failed", error_message=message)
+            if isinstance(schedule_exc, PublishScheduleDeferred):
+                raise
+            return {"success": False, "message": message, "log_id": log.id,
+                    "schedule_error": message}
     except Exception as exc:
         pub_error = exc
         # 一旦进入平台发布调用，异常无法证明平台未产生副作用；即使异常类型

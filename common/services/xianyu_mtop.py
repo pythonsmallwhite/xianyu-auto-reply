@@ -19,7 +19,7 @@ import asyncio
 import json
 import re
 import time
-from typing import Any, Dict, Optional
+from typing import Any, AsyncContextManager, Callable, Dict, Optional
 
 import aiohttp
 from loguru import logger
@@ -141,6 +141,7 @@ async def mtop_call(
     extra_headers: Optional[Dict[str, str]] = None,
     form_field: str = "data",
     request_method: str = "POST",
+    request_guard: Callable[[], AsyncContextManager[None]] | None = None,
 ) -> Dict[str, Any]:
     """调用闲鱼 mtop 接口，统一处理令牌过期/Session过期/风控。
 
@@ -209,44 +210,97 @@ async def mtop_call(
         if extra_headers:
             headers.update(extra_headers)
 
-        try:
-            timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                # 代理为 HTTP 代理（来自代理API的 http://host:port），aiohttp 原生支持，无需额外依赖
-                method = request_method.upper()
-                if method == "GET":
-                    request = session.get(
-                        url,
-                        params={**params, form_field: data_val},
-                        headers=headers,
-                        proxy=proxy or None,
-                    )
-                elif method == "POST":
-                    request = session.post(
-                        url,
-                        params=params,
-                        data={form_field: data_val},
-                        headers=headers,
-                        proxy=proxy or None,
-                    )
-                else:
+        if request_guard is not None:
+            method = request_method.upper()
+            if method not in {"GET", "POST"}:
+                return {
+                    "success": False, "account_invalid": False, "res": None,
+                    "error": f"不支持的 mtop 请求方法: {request_method}", "cookies_str": current_cookies,
+                }
+            # guard 的进入/退出异常直达执行层，不能被网络重试捕获。
+            async with request_guard():
+                try:
+                    timeout = aiohttp.ClientTimeout(total=30)
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        request_kwargs = {
+                            "headers": headers, "proxy": proxy or None,
+                        }
+                        if method == "GET":
+                            request = session.get(
+                                url, params={**params, form_field: data_val}, **request_kwargs,
+                            )
+                        else:
+                            request = session.post(
+                                url, params=params, data={form_field: data_val}, **request_kwargs,
+                            )
+                        async with request as resp:
+                            res_json = await resp.json(content_type=None)
+                            ret = res_json.get("ret") if isinstance(res_json, dict) else None
+                            if (resp.status != 200 or not isinstance(ret, list) or len(ret) != 1
+                                    or not isinstance(ret[0], str)):
+                                raise ValueError("发布接口未返回有效响应")
+                            ret_msg = ret[0]
+                            ret_code, separator, _ = ret_msg.partition("::")
+                            # 只按状态码确认结果；空码、陌生码或混合 ret 均需对账，
+                            # 不能凭描述里的 SUCCESS/风控关键字释放额度。
+                            if not separator or not re.fullmatch(
+                                r"SUCCESS|FAIL_[A-Z0-9]+(?:_[A-Z0-9]+)*|RGV587_ERROR|WUA_IS_MACHINE",
+                                ret_code,
+                            ):
+                                raise ValueError("发布接口返回无法确认的状态码")
+                except Exception:  # 请求一旦开始，异常不能证明平台没有发布。
                     return {
                         "success": False, "account_invalid": False, "res": None,
-                        "error": f"不支持的 mtop 请求方法: {request_method}", "cookies_str": current_cookies,
+                        "error": "发布请求异常或响应无效，请先对账", "cookies_str": current_cookies,
+                        "_request_status_unknown": True,
                     }
-                async with request as resp:
-                    res_json = await resp.json(content_type=None)
-                    set_cookies = extract_cookies_from_response(resp)
-        except Exception as exc:  # noqa: BLE001
-            last_error = f"请求异常: {exc}"
-            logger.warning(f"【{account_id}】{api} {last_error}")
-            await asyncio.sleep(0.5)
-            continue
+            # 最终发布只允许一次 HTTP；令牌拒绝是明确失败，不刷新重发。
+            if any(marker in ret_msg for marker in _TOKEN_EXPIRED_MARKERS):
+                return {
+                    "success": False, "account_invalid": False, "res": res_json,
+                    "error": ret_msg, "cookies_str": current_cookies,
+                }
+        else:
+            try:
+                timeout = aiohttp.ClientTimeout(total=30)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    # 代理为 HTTP 代理（来自代理API的 http://host:port），aiohttp 原生支持，无需额外依赖
+                    method = request_method.upper()
+                    if method == "GET":
+                        request = session.get(
+                            url,
+                            params={**params, form_field: data_val},
+                            headers=headers,
+                            proxy=proxy or None,
+                        )
+                    elif method == "POST":
+                        request = session.post(
+                            url,
+                            params=params,
+                            data={form_field: data_val},
+                            headers=headers,
+                            proxy=proxy or None,
+                        )
+                    else:
+                        return {
+                            "success": False, "account_invalid": False, "res": None,
+                            "error": f"不支持的 mtop 请求方法: {request_method}", "cookies_str": current_cookies,
+                        }
+                    async with request as resp:
+                        res_json = await resp.json(content_type=None)
+                        set_cookies = extract_cookies_from_response(resp)
+            except Exception as exc:  # noqa: BLE001
+                last_error = f"请求异常: {exc}"
+                logger.warning(f"【{account_id}】{api} {last_error}")
+                await asyncio.sleep(0.5)
+                continue
 
         ret = res_json.get("ret") or [""]
         ret_msg = ret[0] if ret else ""
 
-        if "SUCCESS::" in ret_msg:
+        if (request_guard is not None and ret_code == "SUCCESS") or (
+                request_guard is None and "SUCCESS::" in ret_msg
+        ):
             # 期间刷新过令牌：把最新 Cookie 写回数据库
             if token_refreshed:
                 await update_account_cookies_in_db(account_id, current_cookies, owner_id=owner_id)

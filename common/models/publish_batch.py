@@ -3,8 +3,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Index, Integer, JSON, String, UniqueConstraint
+from sqlalchemy import BigInteger, DateTime, Float, Index, Integer, JSON, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.mysql import DATETIME
+
+SCHEDULE_DATETIME = DateTime().with_variant(DATETIME(fsp=6), "mysql")
 
 from common.db.base_class import Base, TimestampMixin
 
@@ -35,6 +38,9 @@ class PublishBatch(TimestampMixin, Base):
     material_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     account_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    window_hours: Mapped[int | None] = mapped_column(Integer)
+    window_started_at: Mapped[datetime | None] = mapped_column(SCHEDULE_DATETIME)
+    deadline_at: Mapped[datetime | None] = mapped_column(SCHEDULE_DATETIME)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default=BATCH_STATUS_PENDING)
     error_message: Mapped[str | None] = mapped_column(String(1000))
     started_at: Mapped[datetime | None] = mapped_column(DateTime)
@@ -72,13 +78,21 @@ class PublishBatchTarget(TimestampMixin, Base):
     owner_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     account_id: Mapped[str] = mapped_column(String(80), nullable=False)
     material_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    internal_product_id: Mapped[int | None] = mapped_column(BigInteger)
     material_payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    window_hours: Mapped[int | None] = mapped_column(Integer)
+    window_started_at: Mapped[datetime | None] = mapped_column(SCHEDULE_DATETIME)
+    deadline_at: Mapped[datetime | None] = mapped_column(SCHEDULE_DATETIME)
+    minimum_gap_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    available_at: Mapped[datetime | None] = mapped_column(SCHEDULE_DATETIME)
+    request_started_at: Mapped[datetime | None] = mapped_column(SCHEDULE_DATETIME)
+    schedule_error: Mapped[str | None] = mapped_column(String(1000))
     status: Mapped[str] = mapped_column(String(20), nullable=False, default=TARGET_STATUS_PENDING)
     publish_log_id: Mapped[int | None] = mapped_column(BigInteger)
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     lease_token: Mapped[str | None] = mapped_column(String(36))
-    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime)
-    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(SCHEDULE_DATETIME)
+    scheduled_at: Mapped[datetime | None] = mapped_column(SCHEDULE_DATETIME)
     started_at: Mapped[datetime | None] = mapped_column(DateTime)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
     error_message: Mapped[str | None] = mapped_column(String(1000))
@@ -97,6 +111,13 @@ class PublishBatchAttempt(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default=TARGET_STATUS_PUBLISHING)
     publish_log_id: Mapped[int | None] = mapped_column(BigInteger)
     started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    window_hours: Mapped[int | None] = mapped_column(Integer)
+    window_started_at: Mapped[datetime | None] = mapped_column(SCHEDULE_DATETIME)
+    scheduled_at: Mapped[datetime | None] = mapped_column(SCHEDULE_DATETIME)
+    deadline_at: Mapped[datetime | None] = mapped_column(SCHEDULE_DATETIME)
+    minimum_gap_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    request_started_at: Mapped[datetime | None] = mapped_column(SCHEDULE_DATETIME)
+    schedule_error: Mapped[str | None] = mapped_column(String(1000))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
     item_id: Mapped[str | None] = mapped_column(String(64))
     error_message: Mapped[str | None] = mapped_column(String(1000))
