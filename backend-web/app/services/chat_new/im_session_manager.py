@@ -167,16 +167,20 @@ class ImSessionManager:
             if not ws_set:
                 return
             payload = json.dumps(parsed_msg, ensure_ascii=False)
-            dead: List[WebSocket] = []
-            for ws in ws_set:
+            async def send_one(ws):
                 try:
-                    await ws.send_text(payload)
+                    await asyncio.wait_for(ws.send_text(payload), timeout=5)
                 except Exception:
-                    dead.append(ws)
-            # 清理已断开的连接
+                    return ws
+                return None
+
+            # 发送期间连接可注册/注销；快照避免集合迭代失效，慢连接不阻塞其他连接。
+            dead = await asyncio.gather(*(send_one(ws) for ws in tuple(ws_set)))
             for ws in dead:
-                ws_set.discard(ws)
-            if not ws_set and account_id in self._ws_clients:
+                if ws is not None:
+                    ws_set.discard(ws)
+            # 旧集合清理不得误删发送期间新建的订阅集合。
+            if not ws_set and self._ws_clients.get(account_id) is ws_set:
                 del self._ws_clients[account_id]
 
         client.add_push_callback(_forward_to_frontend)

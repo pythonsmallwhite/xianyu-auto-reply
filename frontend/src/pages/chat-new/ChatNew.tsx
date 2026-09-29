@@ -150,6 +150,8 @@ export function ChatNew() {
   const activeCidRef = useRef(activeCid)
   useEffect(() => { activeCidRef.current = activeCid }, [activeCid])
   const reloadOrdersRef = useRef<() => void>(() => {})
+  const messageRequestRef = useRef(0)
+
 
   // ==================== 按账号缓存：切换账号时保留数据 ====================
   /** 每个账号的会话列表缓存 */
@@ -225,12 +227,100 @@ export function ChatNew() {
     return [newConv, ...convs]
   }
 
-  /** 追加消息到消息列表（去重自己发的） */
-  const appendMsg = (msgs: ChatMessage[], msg: ChatMessage): ChatMessage[] => {
-    if (msg.isSelf && msgs.some((m) => m.isSelf && m.text === msg.text && Math.abs(m.time - msg.time) < 5000)) {
-      return msgs
+  /**
+   * 按稳定 messageId 合并消息列表
+   *
+   * 同一会话的消息可能同时来自推送和拉取两条路径（重连补拉、手动刷新、
+   * 翻页），必须按 id 去重而不是按文本猜测：
+   * - 带 messageId 的消息 → 以 id 判等，重复则丢弃（保留本地已有对象及 failed 等本地状态）
+   * - 本地乐观消息（messageId 为空，如发送失败态）→ 仅与同为无 id 的自身消息做受控兜底判重
+   *
+   * 时间接近判定只用于没有 id 的乐观消息兜底，不再作为常规去重手段。
+   */
+  const mergeMessages = useCallback((
+    existing: ChatMessage[],
+    incoming: ChatMessage[],
+    mode: 'append' | 'prepend' | 'replace',
+  ): ChatMessage[] => {
+    // 已有 id 集合：无 id 的本地乐观消息不参与 id 判等
+    const seenIds = new Set(
+      existing.map((msg) => msg.messageId).filter((id): id is string => !!id),
+    )
+
+    const isOptimisticDuplicate = (candidate: ChatMessage, other: ChatMessage) =>
+      !candidate.messageId && !other.messageId
+      && candidate.isSelf === other.isSelf
+      && candidate.type === other.type
+      && candidate.text === other.text
+      && Math.abs(candidate.time - other.time) < 5000
+
+    const accepted: ChatMessage[] = []
+    for (const msg of incoming) {
+      if (msg.messageId) {
+        if (seenIds.has(msg.messageId)) continue
+        seenIds.add(msg.messageId)
+        accepted.push(msg)
+        continue
+      }
+      const duplicated = existing.some((item) => isOptimisticDuplicate(msg, item))
+        || accepted.some((item) => isOptimisticDuplicate(msg, item))
+      if (!duplicated) accepted.push(msg)
     }
-    return [...msgs, msg]
+
+    if (mode === 'replace') return accepted
+    return mode === 'append' ? [...existing, ...accepted] : [...accepted, ...existing]
+  }, [])
+
+  /** 追加消息到消息列表（按 messageId 去重） */
+  const appendMsg = (msgs: ChatMessage[], msg: ChatMessage): ChatMessage[] => {
+    return mergeMessages(msgs, [msg], 'append')
+  }
+
+  /**
+   * 把本地发送结果写入它真正属于的账号/会话
+   *
+   * 发送请求是异步的，等待期间用户可能已切到别的账号或别的会话。
+   * 若无条件写当前 state，这条消息会串到别人的会话里（错会话、错账号），
+   * 因此这里以发起时的 accountId + cid 为准分派：
+   * - 仍是当前会话 → 更新 state
+   * - 已不是当前会话 → 只写该账号的会话/消息缓存，等切回去时可见
+   *
+   * summary 为 null 表示不更新会话列表摘要（发送失败时用，避免列表里
+   * 出现一条实际并未发出的文本）。
+   */
+  const applySentMessage = (
+    accountId: string,
+    cid: string,
+    msg: ChatMessage,
+    summary: string | null,
+  ) => {
+    const isActiveAccount = accountId === activeAccountIdRef.current
+    const isViewingConv = isActiveAccount && cid === activeCidRef.current
+
+    if (isViewingConv) {
+      setMessages((prev) => appendMsg(prev, msg))
+    }
+    if (summary === null) return
+
+    if (isActiveAccount) {
+      setConversations((prev) => prev.map((c) =>
+        c.cid === cid
+          ? { ...c, lastMessageSummary: summary, lastMessageTime: msg.time }
+          : c,
+      ))
+    }
+    const convCache = convsCacheRef.current[accountId]
+    if (convCache) {
+      convCache.convs = updateConvList(convCache.convs, cid, summary, msg, false)
+    }
+    // 只为“已有缓存的会话”追加消息。
+    // 绝不凭空新建缓存条目：handleSelectConversation 见到缓存即直接采用，
+    // 若这里写入只有单条消息的缓存，用户切回该会话时历史记录会被这一条顶掉。
+    // 未打开过的会话以服务端历史为准，切回去时重新拉取即可拿到这条消息。
+    const msgCache = msgsCacheRef.current[accountId]?.[cid]
+    if (msgCache) {
+      msgCache.msgs = appendMsg(msgCache.msgs, msg)
+    }
   }
 
   const handleWsNewMessage = useCallback((accountId: string, cid: string, msg: ChatMessage) => {
@@ -272,11 +362,26 @@ export function ChatNew() {
     }).catch(() => {})
   }, [])
 
+  /**
+   * 重连成功后补齐断线期间丢失的推送
+   *
+   * 断线期间的 IM 推送不会重发，只刷新账号列表无法找回消息，
+   * 因此必须重新拉取会话列表；若断开的正是当前账号，还要刷新当前会话的消息。
+   *
+   * 具体拉取逻辑由 refreshAfterReconnectRef 在组件后段注入，
+   * 以免此处引用尚在词法作用域之外、且会随会话切换而过期的加载函数。
+   */
+  const refreshAfterReconnectRef = useRef<(accountId: string) => void>(() => {})
+  const handleWsReconnected = useCallback((accountId: string) => {
+    refreshAfterReconnectRef.current(accountId)
+  }, [])
+
   // 仅为用户手动操作过的已连接账号建立 WebSocket（页面刷新不自动重连）
   useChatNewWs({
     accountIds: wsAccountIds,
     onNewMessage: handleWsNewMessage,
     onDisconnect: handleWsDisconnect,
+    onReconnected: handleWsReconnected,
   })
 
   // ==================== 加载账号列表（分页） ====================
@@ -413,6 +518,8 @@ export function ChatNew() {
 
   // 选中账号时：优先从缓存恢复，无缓存才加载
   useEffect(() => {
+    ++messageRequestRef.current
+    setLoadingMsgs(false)
     if (!activeAccountId) {
       setConversations([])
       setActiveCid('')
@@ -543,24 +650,29 @@ export function ChatNew() {
   const loadMessages = useCallback(
     async (accountId: string, cid: string, append = false) => {
       if (!accountId || !cid) return
+      const request = ++messageRequestRef.current
+      const isCurrent = () => request === messageRequestRef.current
+        && accountId === activeAccountIdRef.current && cid === activeCidRef.current
       if (!append) setLoadingMsgs(true)
       try {
         const cursor = append ? msgCursor : undefined
         const res = await getMessages(accountId, cid, cursor ?? undefined)
+        if (!isCurrent()) return
         if (append) {
-          // 追加历史消息到前面
-          setMessages((prev) => [...res.messages, ...prev])
+          // 历史消息前置，按 id 去重避免与实时推送重叠
+          setMessages((prev) => mergeMessages(prev, res.messages, 'prepend'))
         } else {
-          setMessages(res.messages)
+          // 覆盖式刷新同样按 id 去重，避免接口重复返回导致 key 冲突
+          setMessages((prev) => mergeMessages(prev, res.messages, 'replace'))
         }
         setMsgHasMore(res.hasMore)
         setMsgCursor(res.nextCursor)
       } catch (e: any) {
-        if (!append) {
+        if (isCurrent() && !append) {
           addToast({ message: e.message || '获取聊天记录失败', type: 'error' })
         }
       } finally {
-        setLoadingMsgs(false)
+        if (isCurrent()) setLoadingMsgs(false)
       }
     },
     [addToast, msgCursor],
@@ -568,6 +680,9 @@ export function ChatNew() {
 
   // 选中会话时：优先从缓存恢复消息，无缓存才加载
   const handleSelectConversation = (cid: string) => {
+    ++messageRequestRef.current
+    activeCidRef.current = cid
+    setLoadingMsgs(false)
     setActiveCid(cid)
     // 手机端：选中会话后切到"聊天"Tab
     setMobileTab('chat')
@@ -590,6 +705,104 @@ export function ChatNew() {
   }
 
   const activeConversation = conversations.find((c) => c.cid === activeCid)
+
+  /**
+   * 合并会话列表：最新一页在前，保留已翻页加载的更早会话
+   *
+   * 重连补拉只能取到第一页，若无脑覆盖会丢掉用户已经翻出来的历史会话，
+   * 因此按 cid 去重后把未出现在新数据里的旧项按原顺序接在后面。
+   */
+  const mergeConversations = useCallback((existing: Conversation[], incoming: Conversation[]): Conversation[] => {
+    const incomingCids = new Set(incoming.map((c) => c.cid))
+    const kept = existing.filter((c) => !incomingCids.has(c.cid))
+    if (kept.length === 0) return incoming
+    return [...incoming, ...kept]
+  }, [])
+
+  /**
+   * 增量同步某会话的最新消息（重连补拉专用）
+   *
+   * 与 loadMessages 的覆盖式刷新不同：这里把最新一页按 messageId 合并进已有列表，
+   * 既不破坏已经加载的历史消息，也不改动 msgCursor / msgHasMore，
+   * 否则用户翻到一半的分页位置会被重置。
+   */
+  const syncLatestMessages = useCallback(async (accountId: string, cid: string) => {
+    if (!accountId || !cid) return
+    try {
+      const res = await getMessages(accountId, cid)
+      // 期间用户可能已切换账号或会话，此时不得写入当前消息状态
+      if (accountId !== activeAccountIdRef.current || cid !== activeCidRef.current) return
+      setMessages((prev) => mergeMessages(prev, res.messages, 'append'))
+    } catch {
+      // 补拉失败不打断实时推送，用户仍可手动刷新
+    }
+  }, [mergeMessages])
+
+  /**
+   * 重连后的补偿同步
+   *
+   * 断线期间 IM 推送不会重发，必须主动拉取：
+   * - 始终重新拉取该账号的会话列表（当前账号写 state，后台账号写缓存）
+   * - 再补拉该账号上一次选中的会话消息（当前会话合并进列表，后台会话写缓存）
+   */
+  useEffect(() => {
+    refreshAfterReconnectRef.current = (accountId: string) => {
+      void (async () => {
+        const isActiveAccount = () => accountId === activeAccountIdRef.current
+        try {
+          const res = await getConversations(accountId)
+          const withCachedAvatar = res.conversations.map((c: Conversation) => {
+            const cached = userInfoCacheRef.current[c.otherUserId]
+            if (!cached) return c
+            const updates: Partial<Conversation> = {}
+            if (cached.avatar && !c.otherUserAvatar) updates.otherUserAvatar = cached.avatar
+            if (cached.nick && (!c.otherUserName || isPureDigits(c.otherUserName))) updates.otherUserName = cached.nick
+            return Object.keys(updates).length > 0 ? { ...c, ...updates } : c
+          })
+          if (isActiveAccount()) {
+            setConversations((prev) => mergeConversations(prev, withCachedAvatar))
+            setConvCursor(res.nextCursor)
+            setConvHasMore(res.hasMore)
+          } else {
+            // 后台账号：只更新缓存，避免给非当前账号触发渲染
+            const cached = convsCacheRef.current[accountId]
+            convsCacheRef.current[accountId] = {
+              convs: mergeConversations(cached?.convs || [], withCachedAvatar),
+              hasMore: res.hasMore,
+              cursor: res.nextCursor,
+            }
+          }
+        } catch {
+          // 会话列表补拉失败不阻塞消息补拉
+        }
+
+        const cid = isActiveAccount()
+          ? activeCidRef.current
+          : (activeConvPerAccountRef.current[accountId] || '')
+        if (!cid) return
+
+        if (isActiveAccount()) {
+          await syncLatestMessages(accountId, cid)
+          return
+        }
+        // 后台账号的会话消息也只写缓存
+        try {
+          const res = await getMessages(accountId, cid)
+          if (accountId === activeAccountIdRef.current) return
+          const perAccount = msgsCacheRef.current[accountId] || (msgsCacheRef.current[accountId] = {})
+          const prev = perAccount[cid]
+          perAccount[cid] = {
+            msgs: mergeMessages(prev?.msgs || [], res.messages, 'append'),
+            // 保留原有分页位置，避免覆盖掉已翻页加载的历史
+            hasMore: prev?.hasMore ?? res.hasMore,
+            cursor: prev?.cursor ?? res.nextCursor,
+          }
+        } catch {
+          // 忽略：缓存补拉失败不影响实时推送
+        }
+      })()
+    }
+  }, [syncLatestMessages, mergeMessages, mergeConversations])
 
   useEffect(() => {
     let cancelled = false
@@ -823,15 +1036,18 @@ export function ChatNew() {
       return
     }
 
+    // 固定发起时的账号与会话，结果只写回这里，避免切换后串会话
+    const sendAccountId = activeAccountId
+    const sendCid = activeCid
     const text = rawText.trim()
     setSending(true)
     try {
-      const res = await sendTextMessage(activeAccountId, activeCid, conv.otherUserId, text)
+      const res = await sendTextMessage(sendAccountId, sendCid, conv.otherUserId, text)
       // 无论成功失败，都把这条消息展示在聊天记录中；
       // 失败时标记 failed + failReason，气泡前显示红色感叹号，点击查看原因
       const sentMsg: ChatMessage = {
         messageId: res.data?.messageId || '',
-        senderId: activeAccountId,
+        senderId: sendAccountId,
         senderName: '',
         isSelf: true,
         type: 'text',
@@ -842,17 +1058,8 @@ export function ChatNew() {
         failReason: res.success ? undefined : (res.message || '发送失败'),
       }
       if (clearInput) setInputText('')
-      setMessages((prev) => [...prev, sentMsg])
-      if (res.success) {
-        // 成功才更新会话列表摘要
-        setConversations((prev) =>
-          prev.map((c) =>
-            c.cid === activeCid
-              ? { ...c, lastMessageSummary: text.slice(0, 50), lastMessageTime: sentMsg.time }
-              : c,
-          ),
-        )
-      } else {
+      applySentMessage(sendAccountId, sendCid, sentMsg, res.success ? text.slice(0, 50) : null)
+      if (!res.success) {
         addToast({ message: res.message || '发送失败', type: 'error' })
       }
     } catch (e: any) {
@@ -860,7 +1067,7 @@ export function ChatNew() {
       const failReason = e?.message || '发送失败'
       const sentMsg: ChatMessage = {
         messageId: '',
-        senderId: activeAccountId,
+        senderId: sendAccountId,
         senderName: '',
         isSelf: true,
         type: 'text',
@@ -871,7 +1078,7 @@ export function ChatNew() {
         failReason,
       }
       if (clearInput) setInputText('')
-      setMessages((prev) => [...prev, sentMsg])
+      applySentMessage(sendAccountId, sendCid, sentMsg, null)
       addToast({ message: failReason, type: 'error' })
     } finally {
       setSending(false)
@@ -936,15 +1143,18 @@ export function ChatNew() {
       return false
     }
 
+    // 固定发起时的账号与会话，结果只写回这里，避免切换后串会话
+    const sendAccountId = activeAccountId
+    const sendCid = activeCid
     setSending(true)
     try {
-      const res = await sendImageMessage(activeAccountId, activeCid, conv.otherUserId, file)
+      const res = await sendImageMessage(sendAccountId, sendCid, conv.otherUserId, file)
       // 成功用CDN地址；失败则用本地预览地址，保证用户都能看到所发图片
       const displayUrl = res.success && res.data?.imageUrl ? res.data.imageUrl : URL.createObjectURL(file)
       // 无论成功失败，都把这条图片消息展示在聊天记录中
       const sentMsg: ChatMessage = {
         messageId: res.data?.messageId || '',
-        senderId: activeAccountId,
+        senderId: sendAccountId,
         senderName: '',
         isSelf: true,
         type: 'image',
@@ -954,16 +1164,8 @@ export function ChatNew() {
         failed: !res.success,
         failReason: res.success ? undefined : (res.message || '发送失败'),
       }
-      setMessages((prev) => [...prev, sentMsg])
-      if (res.success) {
-        setConversations((prev) =>
-          prev.map((c) =>
-            c.cid === activeCid
-              ? { ...c, lastMessageSummary: '[图片]', lastMessageTime: sentMsg.time }
-              : c,
-          ),
-        )
-      } else {
+      applySentMessage(sendAccountId, sendCid, sentMsg, res.success ? '[图片]' : null)
+      if (!res.success) {
         addToast({ message: res.message || '发送失败', type: 'error' })
       }
       return res.success
@@ -972,7 +1174,7 @@ export function ChatNew() {
       const displayUrl = URL.createObjectURL(file)
       const sentMsg: ChatMessage = {
         messageId: '',
-        senderId: activeAccountId,
+        senderId: sendAccountId,
         senderName: '',
         isSelf: true,
         type: 'image',
@@ -982,7 +1184,7 @@ export function ChatNew() {
         failed: true,
         failReason,
       }
-      setMessages((prev) => [...prev, sentMsg])
+      applySentMessage(sendAccountId, sendCid, sentMsg, null)
       addToast({ message: failReason, type: 'error' })
       return false
     } finally {

@@ -33,6 +33,7 @@ import { colors, spacing, typography, radius } from '@/lib/theme';
 import { wsManager } from '@/lib/ws';
 import {
   getMessages,
+  getChatAccounts,
   sendMessage,
   sendImageMessage,
   recallMessage,
@@ -46,6 +47,80 @@ import {
 
 /** 消息撤回时间窗口（2 分钟） */
 const RECALL_WINDOW_MS = 2 * 60 * 1000;
+
+/** 本地乐观消息的 ID 前缀：这类消息尚未取得平台 messageId */
+const LOCAL_MSG_PREFIX = 'local-';
+
+/**
+ * 本地乐观占位被真实回声吸收的时间窗口
+ *
+ * 仅用于“自己刚发的那条还没拿到平台 ID”的场景。窗口内的判断同时要求
+ * 同向、同类型、同文本，且**只删除本地占位**：真实消息一定保留，
+ * 因此连发两条相同内容时不会误合并（它们各自带不同的平台 ID）。
+ */
+const LOCAL_ECHO_WINDOW_MS = 5000;
+
+/** 判定是否尚未获取平台 ID 的本地乐观消息 */
+function isLocalMessage(msg: ChatMessage): boolean {
+  return !msg.messageId || msg.messageId.startsWith(LOCAL_MSG_PREFIX);
+}
+
+/**
+ * 判定 local 是否是 real 的本地占位
+ *
+ * 只认“自己 + 同类型 + 同文本 + 时间接近”，且 local 必须没有平台 ID。
+ * 两条真实消息永远互不吸收——它们各自带不同的平台 ID，
+ * 所以连续发送两条相同内容不会丢消息。
+ */
+function isEchoOf(local: ChatMessage, real: ChatMessage): boolean {
+  return isLocalMessage(local) === true
+    && isLocalMessage(real) === false
+    && local.isSelf
+    && real.isSelf
+    && local.type === real.type
+    && local.text === real.text
+    && Math.abs(local.time - real.time) < LOCAL_ECHO_WINDOW_MS;
+}
+
+/**
+ * 按稳定 messageId 合并消息列表
+ *
+ * 去重键为平台 messageId。本地乐观占位（尚无平台 ID）允许被同内容的
+ * 真实回声原地替换，避免自己刚发的消息同时出现“本地一条 + 回声一条”。
+ *
+ * 吸收只发生在 local→real 方向，且是原地替换而非删除后追加，
+ * 因此不会改变气泡顺序。吸收失败最多多显示一条本地占位，
+ * 不会丢失真实消息，属于安全方向的降级。
+ */
+function mergeMessages(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
+  const incomingReals = incoming.filter((m) => !isLocalMessage(m));
+
+  // 已有列表中被真实回声吸收的占位：原地替换为首个吸收它的真实消息
+  const result = existing.map((msg) => {
+    if (!isLocalMessage(msg)) return msg;
+    const absorber = incomingReals.find((real) => isEchoOf(msg, real));
+    return absorber ?? msg;
+  });
+
+  for (const msg of incoming) {
+    // 真实消息按稳定 ID 去重（占位替换后该 ID 已在列表中）
+    if (!isLocalMessage(msg) && result.some((m) => m.messageId === msg.messageId)) continue;
+    if (isLocalMessage(msg)) {
+      // 入参里的本地占位：若已有真实回声（本次或历史）则丢弃，否则追加
+      const absorbed =
+        incomingReals.some((real) => isEchoOf(msg, real)) ||
+        existing.some((real) => isEchoOf(msg, real));
+      if (absorbed) continue;
+      result.push(msg);
+      continue;
+    }
+    result.push(msg);
+  }
+  return result;
+}
+
+/** 距底部多少像素内仍视为“贴底”，用于决定新消息是否自动滚动 */
+const BOTTOM_THRESHOLD_PX = 80;
 
 export default function ChatDetailScreen() {
   const scheme = useColorScheme();
@@ -62,8 +137,12 @@ export default function ChatDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  // hasMore 必须是 state：只存在 ref 里时“加载更早的消息”入口不会随分页耗尽消失
+  const [hasMore, setHasMore] = useState(true);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [showOrders, setShowOrders] = useState(false);
+  // 当前会话所属账号的展示名（多账号下用于确认在回复哪个号）
+  const [accountLabel, setAccountLabel] = useState('');
 
   // 快捷短语
   const [phrases, setPhrases] = useState<QuickPhrase[]>([]);
@@ -86,6 +165,10 @@ export default function ChatDetailScreen() {
   const hasMoreRef = useRef(true);
   // 头部插入历史消息的并发锁（同步 ref，state 异步更新拦不住快速二次触发）
   const loadingMoreRef = useRef(false);
+  // 用户是否贴底：上翻查看历史时不能因为新消息被强行拉回底部
+  const atBottomRef = useRef(true);
+  // 首次布局时直接跳到底部，避免长历史从顶部滚动下来的闪动
+  const didInitialScrollRef = useRef(false);
 
   const loadMessages = useCallback(
     async (append: boolean) => {
@@ -110,12 +193,16 @@ export default function ChatDetailScreen() {
         );
 
         if (append) {
-          setMessages((prev) => [...resp.messages, ...prev]);
+          // 历史分页：更早的消息排在前面，重复项按稳定 ID 去重
+          setMessages((prev) => mergeMessages(resp.messages, prev));
         } else {
-          setMessages(resp.messages);
+          // 首屏/刷新：以服务端最新页为主，同时吸收本地占位与加载期间到达的推送，
+          // 不能整体替换，否则会冲掉刚乐观添加的发送中消息
+          setMessages((prev) => mergeMessages(prev, resp.messages));
         }
         cursorRef.current = resp.nextCursor;
         hasMoreRef.current = resp.hasMore;
+        setHasMore(resp.hasMore);
       } catch (e) {
         console.error('加载消息失败', e);
         prependingRef.current = false; // 出错时复位，避免卡死
@@ -144,19 +231,63 @@ export default function ChatDetailScreen() {
     return () => wsManager.setActiveCid(null);
   }, [id]);
 
+  // 解析当前账号展示名：优先备注名，退回显示名，最后用 ID
+  useEffect(() => {
+    if (!account_id) {
+      setAccountLabel('');
+      return;
+    }
+    let cancelled = false;
+    getChatAccounts()
+      .then((list) => {
+        if (cancelled) return;
+        const match = list.find((a) => a.account_id === account_id);
+        setAccountLabel(match ? match.remark || match.display_name || account_id : account_id);
+      })
+      .catch(() => {
+        if (!cancelled) setAccountLabel(account_id);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [account_id]);
+
   // 订阅 WebSocket 实时消息
   useEffect(() => {
     if (!account_id || !id) return;
     const unsub = wsManager.onMessage((accountId, cid, message) => {
       if (accountId !== account_id || cid !== id) return;
-      // 去重：自己发的消息可能已通过乐观更新添加
-      setMessages((prev) => {
-        if (prev.some((m) => m.messageId === message.messageId)) return prev;
-        return [...prev, message];
-      });
+      // 按稳定 messageId 合并：自己发的消息已通过乐观更新加入，回声到达时替换占位而非重复追加
+      setMessages((prev) => mergeMessages(prev, [message]));
     });
     return unsub;
   }, [account_id, id]);
+
+  /**
+   * 断线重连 / 前台恢复后补拉
+   *
+   * 断连期间的推送会永久丢失，仅靠 WS 心跳无法发现上游 IM 掉线，
+   * 因此每次连接恢复都重新对齐一次本会话的最新一页消息。
+   */
+  const syncLatest = useCallback(async () => {
+    if (!account_id || !id) return;
+    try {
+      const resp = await getMessages(account_id, id, null);
+      // 不触碰 cursorRef / hasMoreRef：补拉只对齐最新页，不能影响历史分页位置
+      setMessages((prev) => mergeMessages(resp.messages, prev));
+    } catch (e) {
+      console.error('补拉最新消息失败', e);
+    }
+  }, [account_id, id]);
+
+  useEffect(() => {
+    if (!account_id) return;
+    const unsub = wsManager.onReconnected((accountId) => {
+      if (accountId !== account_id) return;
+      syncLatest();
+    });
+    return unsub;
+  }, [account_id, syncLatest]);
 
   // 加载快捷短语
   const loadPhrases = useCallback(async () => {
@@ -444,25 +575,38 @@ export default function ChatDetailScreen() {
     <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['bottom']}>
       <KeyboardAvoidingView
         style={styles.container}
+        // Android 依赖 windowSoftInputMode=adjustResize 自适应，显式设置 behavior
+        // 会与系统调整叠加导致输入栏被顶出屏幕，故保持 undefined
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={90}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
       >
-        {/* 聊天头部：买家名 + 黑名单 */}
+        {/* 聊天头部：买家名 + 所属账号 + 黑名单 */}
         <View style={[styles.chatHeader, { backgroundColor: c.surface, borderBottomColor: c.border }]}>
-          <Text style={[styles.chatHeaderName, { color: c.text }]} numberOfLines={1}>
-            {name || '聊天'}
-          </Text>
+          <View style={styles.chatHeaderMain}>
+            <Text style={[styles.chatHeaderName, { color: c.text }]} numberOfLines={1}>
+              {name || '聊天'}
+            </Text>
+            {/* 多账号下必须能看出当前回复的是哪个账号，否则容易回错号 */}
+            {accountLabel ? (
+              <View style={[styles.accountTag, { backgroundColor: c.surfaceAlt, borderColor: c.border }]}>
+                <Text style={[styles.accountTagText, { color: c.textSecondary }]} numberOfLines={1}>
+                  {accountLabel}
+                </Text>
+              </View>
+            ) : null}
+          </View>
           {account_id && id && (
             <BlacklistButton accountId={account_id} cid={id} />
           )}
         </View>
 
-        {hasMoreRef.current && messages.length > 0 && (
+        {hasMore && messages.length > 0 && (
           <Pressable
             onPress={() => loadMessages(true)}
+            disabled={loadingMore}
             style={styles.loadMoreBar}
           >
-            <Text style={[styles.loadMoreText, { color: c.primary }]}>
+            <Text style={[styles.loadMoreText, { color: loadingMore ? c.textMuted : c.primary }]}>
               {loadingMore ? '加载中...' : '加载更早的消息'}
             </Text>
           </Pressable>
@@ -476,13 +620,30 @@ export default function ChatDetailScreen() {
           // 聊天消息频繁追加，保留稍大的渲染窗口保证滚动流畅
           windowSize={11}
           contentContainerStyle={styles.msgList}
+          onScroll={(e) => {
+            const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+            const distanceToBottom =
+              contentSize.height - contentOffset.y - layoutMeasurement.height;
+            atBottomRef.current = distanceToBottom <= BOTTOM_THRESHOLD_PX;
+          }}
+          scrollEventThrottle={16}
+          // 键盘弹起时把最新消息顶到可见区域，否则输入时看不到刚发的消息
+          onLayout={() => {
+            if (!didInitialScrollRef.current && messages.length > 0) {
+              didInitialScrollRef.current = true;
+              listRef.current?.scrollToEnd({ animated: false });
+            }
+          }}
           onContentSizeChange={() => {
             if (prependingRef.current) {
               // 历史消息头部插入完成，保持当前阅读位置
               prependingRef.current = false;
               return;
             }
-            listRef.current?.scrollToEnd({ animated: true });
+            // 仅在用户贴底时跟随新消息；上翻查看历史时不能被强行拉回底部
+            if (atBottomRef.current) {
+              listRef.current?.scrollToEnd({ animated: true });
+            }
           }}
           ListEmptyComponent={
             <View style={styles.empty}>
@@ -592,12 +753,14 @@ export default function ChatDetailScreen() {
             style={[styles.input, { color: c.text, backgroundColor: c.background }]}
             multiline
             maxLength={500}
-            editable={!sending}
+            // 发送期间不禁用输入：editable=false 会收起键盘并中断连续输入
+            // （用户常在等回执时接着打字），并发发送由发送按钮 disabled 与
+            // handleSend 的 sending 判断拦截，不需要锁输入框
           />
           <Pressable
             onPress={handleSend}
             disabled={!inputText.trim() || sending}
-            style={[styles.sendBtn, { backgroundColor: inputText.trim() ? c.primary : c.border }]}
+            style={[styles.sendBtn, { backgroundColor: inputText.trim() && !sending ? c.primary : c.border }]}
           >
             {sending ? (
               <ActivityIndicator color="#FFF" />
@@ -753,7 +916,16 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   loadMoreBar: { paddingVertical: spacing.sm, alignItems: 'center' },
   chatHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderBottomWidth: 1 },
-  chatHeaderName: { ...typography.heading, flex: 1, marginRight: spacing.sm },
+  chatHeaderMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginRight: spacing.sm },
+  chatHeaderName: { ...typography.heading, flexShrink: 1 },
+  accountTag: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    maxWidth: 130,
+  },
+  accountTagText: { ...typography.small },
   loadMoreText: { ...typography.caption },
   msgList: { padding: spacing.md, gap: spacing.sm },
   msgRow: { flexDirection: 'row', gap: spacing.sm, maxWidth: '100%' },

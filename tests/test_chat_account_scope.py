@@ -70,5 +70,28 @@ class ChatAccountScopeTests(unittest.TestCase):
                 self.assertIn("无权", result.message)
 
 
+class ChatHistoryErrorTests(unittest.TestCase):
+    def test_upstream_error_is_not_an_empty_success(self):
+        from unittest.mock import AsyncMock, Mock
+        tree = ast.parse(ROUTE_PATH.read_text(encoding="utf-8-sig"))
+        fn = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "get_messages")
+        fn.decorator_list = []
+        scope = {
+            "Depends": lambda dependency: None,
+            "get_current_active_user": object(), "get_db_session": object(),
+            "ApiResponse": lambda **fields: SimpleNamespace(**fields),
+            "_get_owned_chat_account": AsyncMock(return_value=True),
+            "get_im_session_manager": lambda: SimpleNamespace(clients={"a": SimpleNamespace(
+                is_connected=True, get_messages=AsyncMock(return_value={"reason": "temporary"}))}),
+            "logger": Mock(),
+        }
+        module = ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), fn], type_ignores=[])
+        ast.fix_missing_locations(module)
+        exec(compile(module, str(ROUTE_PATH), "exec"), scope)
+        result = asyncio.run(scope["get_messages"]("a", "cid", current_user=object(), db=object()))
+        self.assertFalse(result.success)
+        self.assertIn("暂时不可用", result.message)
+
+
 if __name__ == "__main__":
     unittest.main()

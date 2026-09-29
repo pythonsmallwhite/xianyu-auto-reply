@@ -9,6 +9,7 @@ const RECONNECT_MAX_RETRIES = 10;
 
 type MessageListener = (accountId: string, cid: string, message: ChatMessage) => void;
 type StatusListener = (accountId: string, connected: boolean) => void;
+type ReconnectedListener = (accountId: string) => void;
 
 interface WsConnection {
   ws: WebSocket;
@@ -22,10 +23,18 @@ class WsManager {
   private connections = new Map<string, WsConnection>();
   private messageListeners = new Set<MessageListener>();
   private statusListeners = new Set<StatusListener>();
+  private reconnectedListeners = new Set<ReconnectedListener>();
   private serverUrl: string | null = null;
   private token: string | null = null;
   private activeCid: string | null = null;
   private appStateSub: { remove: () => void } | null = null;
+  /**
+   * 曾经建连成功的账号集合
+   *
+   * 用于区分首次建连与断线重连：断连期间的推送已永久丢失，
+   * 只有重连才需要通知调用方补偿拉取；首次建连由页面初始加载负责。
+   */
+  private everConnected = new Set<string>();
 
   constructor() {
     // 前台恢复时重连所有掉线的账号（重试耗尽后 WS 不会自行恢复）
@@ -77,6 +86,16 @@ class WsManager {
     return () => this.statusListeners.delete(listener);
   }
 
+  /**
+   * 订阅重连成功事件（首次建连不触发）
+   *
+   * 断连期间的推送会永久丢失，调用方应借此重新拉取会话与消息补齐缺口。
+   */
+  onReconnected(listener: ReconnectedListener): () => void {
+    this.reconnectedListeners.add(listener);
+    return () => this.reconnectedListeners.delete(listener);
+  }
+
   connect(accountId: string, initialRetryCount = 0) {
     if (!this.serverUrl || !this.token) return;
     // 已有连接且未关闭则跳过
@@ -105,6 +124,10 @@ class WsManager {
       connection.retryCount = 0;
       logger.info('WS', `已连接: accountId=${accountId}`);
       this.notifyStatus(accountId, true);
+      // 重连：断连期间的推送已丢失，通知调用方补偿拉取
+      const isReconnect = this.everConnected.has(accountId);
+      this.everConnected.add(accountId);
+      if (isReconnect) this.notifyReconnected(accountId);
       connection.heartbeatTimer = setInterval(() => {
         if (connection.ws.readyState === WebSocket.OPEN) {
           connection.ws.send(JSON.stringify({ type: 'ping' }));
@@ -137,6 +160,8 @@ class WsManager {
       if (connection.closed) return;
       if (event.code === 4401 || event.code === 4403) {
         logger.warn('WS', `认证失败(${event.code})，不再重连: accountId=${accountId}`);
+        // 认证失败后重新登录再建连应按首次连接处理，避免触发一次无意义的补拉
+        this.everConnected.delete(accountId);
         return;
       }
 
@@ -175,6 +200,9 @@ class WsManager {
     if (conn.reconnectTimer) clearTimeout(conn.reconnectTimer);
     conn.ws.close();
     this.connections.delete(accountId);
+    // 主动断开（切账号/离开页面）清除“曾连接”标记，下次建连按首次处理。
+    // 网络掉线走内部重试路径，不经过这里，标记得以保留并触发补拉。
+    this.everConnected.delete(accountId);
     this.notifyStatus(accountId, false);
   }
 
@@ -204,6 +232,10 @@ class WsManager {
 
   private notifyStatus(accountId: string, connected: boolean) {
     this.statusListeners.forEach((fn) => fn(accountId, connected));
+  }
+
+  private notifyReconnected(accountId: string) {
+    this.reconnectedListeners.forEach((fn) => fn(accountId));
   }
 }
 

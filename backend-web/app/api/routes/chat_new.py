@@ -363,13 +363,13 @@ async def get_messages(
             cid=cid, start_timestamp=cursor, limit=limit
         )
 
-        # 检测IM错误响应（可能是瞬态问题，返回空数据让轮询重试）
+        # 瞬态错误不能伪装成空会话，否则前端会覆盖已有消息。
         if isinstance(body, dict) and "reason" in body:
             err_msg = body.get("developerMessage", body.get("reason", ""))
             logger.warning(f"【{account_id}】IM消息列表返回错误: {err_msg}，等待下次轮询重试")
             return ApiResponse(
-                success=True,
-                data={"messages": [], "hasMore": False, "nextCursor": None},
+                success=False,
+                message="IM消息列表暂时不可用，请稍后重试",
             )
 
         # 解析消息列表（IM返回倒序，需反转为正序：最旧在前，最新在后）

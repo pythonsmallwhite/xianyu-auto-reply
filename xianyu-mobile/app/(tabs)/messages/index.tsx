@@ -27,6 +27,45 @@ import {
   type ChatMessage,
 } from '@/api/wrappers/chat';
 
+/** 会话列表同步条数上限：避免长列表在合并后无限增长 */
+const CONV_CACHE_LIMIT = 200;
+
+/**
+ * 按 cid 合并会话列表
+ *
+ * prev 是界面当前持有的列表（含用户已翻页加载的旧会话、本地新建的会话），
+ * incoming 是本次服务端返回的一页。两种模式的区别只在排列方向：
+ *
+ * - `refresh`（首屏刷新 / 重连补拉）：服务端返回最新一页，按服务端顺序
+ *   放在前面；prev 中服务端未返回的项代表更早翻到的历史会话或本地新建
+ *   会话，必须接在后面保留，否则一次补拉就把已翻过的内容打回最新一页。
+ * - `append`（翻页加载更早）：新页更早，接在现有列表之后。
+ *
+ * 两种模式下同 cid 的字段都以 incoming（服务端）为准，避免刷新后
+ * 还显示上一次的旧摘要与未读数。
+ */
+function mergeConversations(
+  prev: Conversation[],
+  incoming: Conversation[],
+  mode: 'refresh' | 'append',
+): Conversation[] {
+  const incomingById = new Map(incoming.map((conv) => [conv.cid, conv]));
+  // 同 cid 以服务端字段为准；incoming 未覆盖的项保持原样
+  const updated = prev.map((conv) => incomingById.get(conv.cid) ?? conv);
+
+  let merged: Conversation[];
+  if (mode === 'refresh') {
+    const prevOnly = updated.filter((conv) => !incomingById.has(conv.cid));
+    merged = [...incoming, ...prevOnly];
+  } else {
+    const prevIds = new Set(prev.map((conv) => conv.cid));
+    merged = [...updated, ...incoming.filter((conv) => !prevIds.has(conv.cid))];
+  }
+
+  // 超出上限时丢弃最旧的部分（列表按最新在前排列，尾部即最旧）
+  return merged.length > CONV_CACHE_LIMIT ? merged.slice(0, CONV_CACHE_LIMIT) : merged;
+}
+
 export default function MessagesScreen() {
   const scheme = useColorScheme();
   const c = colors[scheme === 'dark' ? 'dark' : 'light'];
@@ -79,9 +118,11 @@ export default function MessagesScreen() {
         if (convSeqRef.current !== seq) return; // 已切到别的账号，丢弃本次响应
 
         if (append) {
-          setConversations((prev) => [...prev, ...resp.conversations]);
+          // 翻页加载更早：新页接在现有列表之后
+          setConversations((prev) => mergeConversations(prev, resp.conversations, 'append'));
         } else {
-          setConversations(resp.conversations);
+          // 刷新/重连补拉：服务端最新页在前，保留已翻页的旧会话
+          setConversations((prev) => mergeConversations(prev, resp.conversations, 'refresh'));
         }
         cursorRef.current = resp.nextCursor;
         hasMoreRef.current = resp.hasMore;
@@ -97,6 +138,22 @@ export default function MessagesScreen() {
     },
     [selectedAccount],
   );
+
+  /**
+   * 断线重连 / 前台恢复后补拉会话列表
+   *
+   * 断连期间的新会话推送会永久丢失，仅靠 WS 心跳无法发现上游 IM 掉线，
+   * 因此每次连接恢复都重新对齐一次会话列表。
+   */
+  useEffect(() => {
+    if (!selectedAccount) return;
+    const accountId = selectedAccount.account_id;
+    const unsub = wsManager.onReconnected((reconnectedId) => {
+      if (reconnectedId !== accountId) return;
+      loadConversations(false);
+    });
+    return unsub;
+  }, [selectedAccount, loadConversations]);
 
   // 配置并连接 WebSocket
   useEffect(() => {
