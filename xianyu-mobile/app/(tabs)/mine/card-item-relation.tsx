@@ -7,6 +7,7 @@ import {
   RefreshControl,
   Pressable,
   ScrollView,
+  Switch,
   Image,
   ActivityIndicator,
   Alert,
@@ -36,6 +37,7 @@ export default function CardItemRelationScreen() {
 
   const [accounts, setAccounts] = useState<AccountOption[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string>('');
+  const [showHistory, setShowHistory] = useState(false);
   const [items, setItems] = useState<XianyuItem[]>([]);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
@@ -49,8 +51,26 @@ export default function CardItemRelationScreen() {
   // 选中态以 getCardItemIds 为准（含已删除商品的孤儿关联），保存时不丢失
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  // 切换账号/分页会触发重复请求，用序号丢弃过期响应
+  // 筛选在事件中立即失效旧请求，序号同时保护响应、错误和加载状态。
   const reqSeqRef = useRef(0);
+  const filtersRef = useRef({ accountId: '', showHistory: false });
+  const requestPendingRef = useRef(false);
+
+  const changeFilters = (accountId: string, history: boolean) => {
+    if (accountId === filtersRef.current.accountId && history === filtersRef.current.showHistory) return;
+    filtersRef.current = { accountId, showHistory: history };
+    ++reqSeqRef.current;
+    requestPendingRef.current = true;
+    setItems([]);
+    setPage(1);
+    setTotalPages(0);
+    setTotal(0);
+    setLoading(true);
+    setRefreshing(false);
+    setLoadingMore(false);
+    setSelectedAccountId(accountId);
+    setShowHistory(history);
+  };
 
   const loadAccounts = useCallback(async () => {
     try {
@@ -72,16 +92,19 @@ export default function CardItemRelationScreen() {
   }, [cardId]);
 
   const loadItems = useCallback(
-    async (accountId: string, opts?: { append?: boolean; fromPage?: number }) => {
+    async (opts?: { append?: boolean; fromPage?: number }) => {
       const append = opts?.append ?? false;
+      if (append && requestPendingRef.current) return;
       const targetPage = opts?.fromPage ?? 1;
+      const { accountId, showHistory: history } = filtersRef.current;
       const seq = ++reqSeqRef.current;
-      if (append) setLoadingMore(true);
-      else if (opts?.fromPage == null) setRefreshing(true);
+      requestPendingRef.current = true;
+      setLoadingMore(append);
+      setRefreshing(!append);
       try {
-        const res = await getXianyuItems(targetPage, PAGE_SIZE, accountId || undefined);
+        const res = await getXianyuItems(targetPage, PAGE_SIZE, accountId || undefined, history);
         if (seq !== reqSeqRef.current) return;
-        setItems((prev) => (append ? [...prev, ...res.items] : res.items));
+        setItems((prev) => seq !== reqSeqRef.current ? prev : (append ? [...prev, ...res.items] : res.items));
         setPage(res.page);
         setTotalPages(res.total_pages);
         setTotal(res.total);
@@ -90,8 +113,9 @@ export default function CardItemRelationScreen() {
         Alert.alert('加载失败', (e as Error).message);
       } finally {
         if (seq !== reqSeqRef.current) return;
-        if (append) setLoadingMore(false);
-        else if (opts?.fromPage == null) setRefreshing(false);
+        requestPendingRef.current = false;
+        setLoadingMore(false);
+        setRefreshing(false);
         setLoading(false);
       }
     },
@@ -106,42 +130,48 @@ export default function CardItemRelationScreen() {
 
   useEffect(() => {
     setLoading(true);
-    loadItems(selectedAccountId);
-  }, [selectedAccountId, loadItems]);
+    loadItems();
+    return () => { ++reqSeqRef.current; };
+  }, [selectedAccountId, showHistory, loadItems]);
 
   const handleRefresh = useCallback(() => {
-    loadItems(selectedAccountId);
-  }, [selectedAccountId, loadItems]);
+    loadItems();
+  }, [loadItems]);
 
   const handleLoadMore = useCallback(() => {
     if (loadingMore || refreshing || loading) return;
-    if (totalPages > 0 && page >= totalPages) return;
-    loadItems(selectedAccountId, { append: true, fromPage: page + 1 });
-  }, [loadingMore, refreshing, loading, totalPages, page, selectedAccountId, loadItems]);
+    if (totalPages === 0 || page >= totalPages) return;
+    loadItems({ append: true, fromPage: page + 1 });
+  }, [loadingMore, refreshing, loading, totalPages, page, loadItems]);
 
-  const toggle = useCallback((itemId: string) => {
+  // 历史行只展示，不加入按 item_id 保存的跨账号批量关联。
+  const selectableItems = items.filter((item) =>
+    item.source_category === 'managed' || item.source_category === 'tool_published_unlinked');
+
+  const toggle = useCallback((item: XianyuItem) => {
+    if (item.source_category !== 'managed' && item.source_category !== 'tool_published_unlinked') return;
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(itemId)) next.delete(itemId);
-      else next.add(itemId);
+      if (next.has(item.item_id)) next.delete(item.item_id);
+      else next.add(item.item_id);
       return next;
     });
   }, []);
 
   const allLoadedSelected =
-    items.length > 0 && items.every((x) => selectedIds.has(x.item_id));
+    selectableItems.length > 0 && selectableItems.every((x) => selectedIds.has(x.item_id));
 
   const handleSelectAll = useCallback(() => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (allLoadedSelected) {
-        items.forEach((x) => next.delete(x.item_id));
+        selectableItems.forEach((x) => next.delete(x.item_id));
       } else {
-        items.forEach((x) => next.add(x.item_id));
+        selectableItems.forEach((x) => next.add(x.item_id));
       }
       return next;
     });
-  }, [allLoadedSelected, items]);
+  }, [allLoadedSelected, selectableItems]);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
@@ -161,15 +191,17 @@ export default function CardItemRelationScreen() {
 
   const renderItem = ({ item }: { item: XianyuItem }) => {
     const checked = selectedIds.has(item.item_id);
+    const isHistory = item.source_category !== 'managed' && item.source_category !== 'tool_published_unlinked';
     return (
       <Pressable
-        onPress={() => toggle(item.item_id)}
+        disabled={isHistory}
+        onPress={() => toggle(item)}
         style={({ pressed }) => [
           styles.cardRow,
           { backgroundColor: checked ? c.primaryLight : c.surface, opacity: pressed ? 0.9 : 1 },
         ]}
       >
-        {checked ? (
+        {isHistory ? null : checked ? (
           <CheckSquare size={18} stroke={c.primary} />
         ) : (
           <Square size={18} stroke={c.textMuted} />
@@ -185,6 +217,11 @@ export default function CardItemRelationScreen() {
           <Text style={[styles.title, { color: c.text }]} numberOfLines={2}>
             {item.title || '无标题'}
           </Text>
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            {item.source_category === 'managed' ? '已关联内部商品' :
+              item.source_category === 'tool_published_unlinked' ? '工具发布 · 未关联' : '历史/来源待确认'}
+            {isHistory ? ' · 仅展示，请到商品管理选择所属账号单件操作' : ''}
+          </Text>
           <Text style={[styles.meta, { color: c.textMuted }]} numberOfLines={1}>
             {item.price ? `¥${item.price}` : '价格未知'}
             {item.quantity !== null && item.quantity !== '' && item.quantity !== undefined
@@ -196,21 +233,13 @@ export default function CardItemRelationScreen() {
     );
   };
 
-  if (loading) {
-    return (
-      <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['left', 'right', 'bottom']}>
-        <Loading label="加载商品..." />
-      </SafeAreaView>
-    );
-  }
-
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['left', 'right', 'bottom']}>
       {/* 账号选择（胶囊横滑） */}
       <View style={[styles.accountBar, { borderBottomColor: c.borderLight }]}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRowScroll}>
           <Pressable
-            onPress={() => setSelectedAccountId('')}
+            onPress={() => changeFilters('', showHistory)}
             style={[
               styles.chip,
               {
@@ -228,7 +257,7 @@ export default function CardItemRelationScreen() {
             return (
               <Pressable
                 key={acc.id}
-                onPress={() => setSelectedAccountId(acc.id)}
+                onPress={() => changeFilters(acc.id, showHistory)}
                 style={[
                   styles.chip,
                   {
@@ -246,6 +275,14 @@ export default function CardItemRelationScreen() {
         </ScrollView>
       </View>
 
+      <View style={styles.historyRow}>
+        <Text style={[styles.count, { color: c.text }]}>显示历史商品</Text>
+        <Switch
+          accessibilityLabel="显示历史商品"
+          value={showHistory}
+          onValueChange={(value) => changeFilters(selectedAccountId, value)}
+        />
+      </View>
       {/* 工具栏：标题 + 全选 + 计数 */}
       <View style={[styles.toolbar, { borderBottomColor: c.borderLight, backgroundColor: c.surfaceAlt }]}>
         <View style={styles.toolbarLeft}>
@@ -258,7 +295,7 @@ export default function CardItemRelationScreen() {
         </View>
         <Pressable
           onPress={handleSelectAll}
-          disabled={items.length === 0}
+          disabled={selectableItems.length === 0}
           style={({ pressed }) => [
             styles.selectAll,
             { backgroundColor: allLoadedSelected ? c.primaryLight : c.surface, opacity: pressed ? 0.7 : 1 },
@@ -284,7 +321,7 @@ export default function CardItemRelationScreen() {
         onEndReached={handleLoadMore}
         onEndReachedThreshold={0.3}
         ListEmptyComponent={
-          <EmptyState
+          loading ? <Loading label="加载商品..." /> : <EmptyState
             icon={Package}
             title="暂无商品"
             message={selectedAccountId ? '该账号暂无已发布商品' : '暂无已发布商品'}
@@ -354,6 +391,7 @@ const styles = StyleSheet.create({
     borderColor: 'transparent',
   },
   selectAllText: { ...typography.small, fontWeight: '600' },
+  historyRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.lg },
   list: { padding: spacing.lg, gap: spacing.sm },
   cardRow: {
     flexDirection: 'row',

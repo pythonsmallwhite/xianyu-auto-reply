@@ -19,6 +19,8 @@ export interface XianyuItem {
   /** 主图 URL：从 item_detail（平台商品 JSON）解析，缺失为 null */
   image: string | null;
   is_seller_item: boolean;
+  /** 后端商品来源分类；缺失时按来源待确认展示。 */
+  source_category?: 'managed' | 'tool_published_unlinked' | 'history_or_unknown';
   created_at?: string;
 }
 
@@ -65,6 +67,7 @@ function mapItem(raw: Record<string, unknown>): XianyuItem {
     quantity: (raw.item_quantity ?? null) as string | number | null,
     image: extractImage(raw.item_detail),
     is_seller_item: Boolean(raw.is_seller_item),
+    source_category: raw.source_category as XianyuItem['source_category'],
     created_at: raw.created_at as string | undefined,
   };
 }
@@ -79,9 +82,12 @@ export async function getXianyuItems(
   page: number = 1,
   pageSize: number = 20,
   cookieId?: string,
+  showHistory: boolean = false,
 ): Promise<XianyuItemsPage> {
   const client = await getApiClient();
-  const query: Record<string, string | number> = { page, page_size: pageSize };
+  const query: Record<string, string | number | boolean> = {
+    page, page_size: pageSize, show_history: showHistory,
+  };
   if (cookieId) query.cookie_id = cookieId;
 
   const { data } = (await (client.GET as any)(`${PREFIX}/paginated`, {

@@ -8,6 +8,7 @@ import {
   RefreshControl,
   Pressable,
   ScrollView,
+  Switch,
   Image,
   ActivityIndicator,
   useColorScheme,
@@ -31,6 +32,7 @@ export default function ItemsScreen() {
 
   const [accounts, setAccounts] = useState<AccountOption[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string>('');
+  const [showHistory, setShowHistory] = useState(false);
   const [items, setItems] = useState<XianyuItem[]>([]);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
@@ -44,9 +46,28 @@ export default function ItemsScreen() {
   // 关联卡券弹窗：当前正在关联卡券的商品，非空即表示弹窗打开
   const [relationItem, setRelationItem] = useState<XianyuItem | null>(null);
 
-  // 切换账号会触发两次 loadItems（useEffect 依赖变更 + selectedAccountId 传入），
-  // 用 ref 记录最新请求序号，丢弃过期响应
+  // 筛选在事件中立即失效旧请求，序号同时保护响应、错误和加载状态。
   const reqSeqRef = useRef(0);
+  const filtersRef = useRef({ accountId: '', showHistory: false });
+  const requestPendingRef = useRef(false);
+
+  const changeFilters = (accountId: string, history: boolean) => {
+    if (accountId === filtersRef.current.accountId && history === filtersRef.current.showHistory) return;
+    filtersRef.current = { accountId, showHistory: history };
+    ++reqSeqRef.current;
+    requestPendingRef.current = true;
+    setItems([]);
+    setPage(1);
+    setTotalPages(0);
+    setTotal(0);
+    setError(null);
+    setLoading(true);
+    setRefreshing(false);
+    setLoadingMore(false);
+    setRelationItem(null);
+    setSelectedAccountId(accountId);
+    setShowHistory(history);
+  };
 
   const loadAccounts = useCallback(async () => {
     try {
@@ -58,36 +79,31 @@ export default function ItemsScreen() {
   }, []);
 
   const loadItems = useCallback(
-    async (accountId: string, opts?: { append?: boolean; fromPage?: number }) => {
+    async (opts?: { append?: boolean; fromPage?: number }) => {
       const append = opts?.append ?? false;
+      if (append && requestPendingRef.current) return;
       const targetPage = opts?.fromPage ?? 1;
+      const { accountId, showHistory: history } = filtersRef.current;
       const seq = ++reqSeqRef.current;
-
-      if (append) {
-        setLoadingMore(true);
-      } else if (opts?.fromPage == null) {
-        setRefreshing(true);
-      }
+      requestPendingRef.current = true;
+      setLoadingMore(append);
+      setRefreshing(!append);
       setError(null);
       try {
-        const res = await getXianyuItems(targetPage, PAGE_SIZE, accountId || undefined);
-        if (seq !== reqSeqRef.current) return; // 已被后续请求覆盖
-        console.log('[ITEMS] API返回', res.items.length, '条, item_ids:', res.items.map(i => i.item_id));
+        const res = await getXianyuItems(targetPage, PAGE_SIZE, accountId || undefined, history);
+        if (seq !== reqSeqRef.current) return;
         setItems((prev) => {
-          // 去重：按 item_id（后端可能返回同 item_id 不同 DB id 的重复行）
-          const seen = new Set(prev.map((i) => i.item_id));
+          if (seq !== reqSeqRef.current) return prev;
+          // 刷新不沿用旧页；同一商品在不同账号下保留独立记录。
+          const base = append ? prev : [];
+          const seen = new Set(base.map((i) => JSON.stringify([i.cookie_id, i.item_id])));
           const newItems = res.items.filter((i) => {
-            if (seen.has(i.item_id)) return false;
-            seen.add(i.item_id);
+            const key = JSON.stringify([i.cookie_id, i.item_id]);
+            if (seen.has(key)) return false;
+            seen.add(key);
             return true;
           });
-          console.log('[ITEMS] 去重后', newItems.length, '条');
-          return append ? [...prev, ...newItems] : newItems;
-        });
-        // total 也按去重后的数量修正
-        setItems((cur) => {
-          setTotal(cur.length);
-          return cur;
+          return [...base, ...newItems];
         });
         setPage(res.page);
         setTotalPages(res.total_pages);
@@ -97,8 +113,9 @@ export default function ItemsScreen() {
         setError((e as Error).message || '加载商品失败');
       } finally {
         if (seq !== reqSeqRef.current) return;
-        if (append) setLoadingMore(false);
-        else if (opts?.fromPage == null) setRefreshing(false);
+        requestPendingRef.current = false;
+        setLoadingMore(false);
+        setRefreshing(false);
         setLoading(false);
       }
     },
@@ -111,31 +128,45 @@ export default function ItemsScreen() {
 
   useEffect(() => {
     setLoading(true);
-    loadItems(selectedAccountId);
-  }, [selectedAccountId, loadItems]);
+    loadItems();
+    return () => { ++reqSeqRef.current; };
+  }, [selectedAccountId, showHistory, loadItems]);
 
   const handleRefresh = useCallback(() => {
-    loadItems(selectedAccountId);
-  }, [selectedAccountId, loadItems]);
+    loadItems();
+  }, [loadItems]);
 
   const handleLoadMore = useCallback(() => {
     if (loadingMore || refreshing || loading) return;
-    if (totalPages > 0 && page >= totalPages) return;
-    loadItems(selectedAccountId, { append: true, fromPage: page + 1 });
-  }, [loadingMore, refreshing, loading, totalPages, page, selectedAccountId, loadItems]);
+    if (totalPages === 0 || page >= totalPages) return;
+    loadItems({ append: true, fromPage: page + 1 });
+  }, [loadingMore, refreshing, loading, totalPages, page, loadItems]);
+
+  const canOperate = useCallback((item: XianyuItem) => {
+    if (!item.cookie_id || !item.item_id) return false;
+    if (item.source_category !== 'managed' && item.source_category !== 'tool_published_unlinked' &&
+        item.cookie_id !== filtersRef.current.accountId) {
+      Alert.alert('请选择所属账号', '历史/来源待确认商品仅允许在所属账号下单件操作。');
+      return false;
+    }
+    return true;
+  }, []);
 
   const handleEdit = useCallback(
     (item: XianyuItem) => {
+      if (!canOperate(item)) return;
       router.push({
         pathname: '/(tabs)/mine/item-edit',
         params: { cookieId: item.cookie_id, itemId: item.item_id },
       });
     },
-    [router],
+    [router, canOperate],
   );
 
   const handleDelete = useCallback(
     (item: XianyuItem) => {
+      if (!canOperate(item)) return;
+      const filterSeq = reqSeqRef.current;
       Alert.alert(
         '删除商品',
         `确定删除「${item.title || '无标题'}」吗？此操作不可撤销。`,
@@ -145,9 +176,10 @@ export default function ItemsScreen() {
             text: '删除',
             style: 'destructive',
             onPress: async () => {
+              if (filterSeq !== reqSeqRef.current || !canOperate(item)) return;
               try {
                 await batchDeleteItems(item.cookie_id, [item.item_id]);
-                loadItems(selectedAccountId);
+                if (filterSeq === reqSeqRef.current) loadItems();
               } catch (e) {
                 Alert.alert('删除失败', (e as Error).message || '未知错误');
               }
@@ -156,18 +188,19 @@ export default function ItemsScreen() {
         ],
       );
     },
-    [loadItems, selectedAccountId],
+    [loadItems, canOperate],
   );
 
   const handleLongPress = useCallback(
     (item: XianyuItem) => {
+      if (!canOperate(item)) return;
       Alert.alert(item.title || '无标题', undefined, [
         { text: '编辑', onPress: () => handleEdit(item) },
         { text: '删除', style: 'destructive', onPress: () => handleDelete(item) },
         { text: '取消', style: 'cancel' },
       ]);
     },
-    [handleEdit, handleDelete],
+    [handleEdit, handleDelete, canOperate],
   );
 
   const accountLabel = (acc: AccountOption) => acc.remark || acc.id;
@@ -197,6 +230,11 @@ export default function ItemsScreen() {
             >
               {item.title || '无标题'}
             </Text>
+            <Text style={[styles.qty, { color: c.textMuted }]}>
+              {item.source_category === 'managed' ? '已关联内部商品' :
+                item.source_category === 'tool_published_unlinked' ? '工具发布 · 未关联' : '历史/来源待确认'}
+              {` · 账号 ${item.cookie_id || '待确认'}`}
+            </Text>
             <View style={styles.metaRow}>
               <Text style={[styles.price, { color: c.warning }]} numberOfLines={1}>
                 {item.price ? `¥${item.price}` : '价格未知'}
@@ -212,8 +250,8 @@ export default function ItemsScreen() {
             </View>
           </View>
         </View>
-        <Pressable
-          onPress={() => setRelationItem(item)}
+        {(item.source_category === 'managed' || item.source_category === 'tool_published_unlinked') && <Pressable
+          onPress={() => { if (canOperate(item)) setRelationItem(item); }}
           style={({ pressed }) => [
             styles.actionRow,
             { borderColor: c.borderLight, opacity: pressed ? 0.6 : 1 },
@@ -221,18 +259,10 @@ export default function ItemsScreen() {
         >
           <Ticket size={14} stroke={c.primary} />
           <Text style={[styles.actionText, { color: c.primary }]}>关联卡券</Text>
-        </Pressable>
+        </Pressable>}
       </Card>
     </Pressable>
   );
-
-  if (loading) {
-    return (
-      <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['left', 'right', 'bottom']}>
-        <Loading label="加载商品..." />
-      </SafeAreaView>
-    );
-  }
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['left', 'right', 'bottom']}>
@@ -240,7 +270,7 @@ export default function ItemsScreen() {
       <View style={[styles.accountBar, { borderBottomColor: c.borderLight }]}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRowScroll}>
           <Pressable
-            onPress={() => setSelectedAccountId('')}
+            onPress={() => changeFilters('', showHistory)}
             style={[
               styles.chip,
               {
@@ -258,7 +288,7 @@ export default function ItemsScreen() {
             return (
               <Pressable
                 key={acc.id}
-                onPress={() => setSelectedAccountId(acc.id)}
+                onPress={() => changeFilters(acc.id, showHistory)}
                 style={[
                   styles.chip,
                   {
@@ -279,6 +309,14 @@ export default function ItemsScreen() {
         </Text>
       </View>
 
+      <View style={styles.historyRow}>
+        <Text style={[styles.qty, { color: c.text }]}>显示历史商品</Text>
+        <Switch
+          accessibilityLabel="显示历史商品"
+          value={showHistory}
+          onValueChange={(value) => changeFilters(selectedAccountId, value)}
+        />
+      </View>
       <FlatList
         data={items}
         keyExtractor={(item) => `${item.cookie_id}-${item.item_id}-${item.id}`}
@@ -288,7 +326,7 @@ export default function ItemsScreen() {
         onEndReached={handleLoadMore}
         onEndReachedThreshold={0.3}
         ListEmptyComponent={
-          error ? (
+          loading ? <Loading label="加载商品..." /> : error ? (
             <EmptyState
               icon={Package}
               title="加载失败"
@@ -346,6 +384,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.xs,
   },
+  historyRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.lg },
   list: { padding: spacing.lg, gap: spacing.md },
   card: { padding: spacing.md },
   cardRow: { flexDirection: 'row', gap: spacing.md },

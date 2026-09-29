@@ -65,3 +65,10 @@
 - 人工确认发布成功后调用已有幂等商品关联服务，以日志的素材 ID 和精确平台商品 ID 建立内部关联；不再次发布。对账和额度事务先提交，关联失败保留已确认结果，返回单独的 binding_status/binding_message 并在 Web 显示警告。
 - 回归验证人工确认成功生成关联、订单正确占用库存、重复补关联不重复建记录，以及关联异常时额度只结算一次、发布成功不回退；库存与额度专项 `-B -m unittest tests.test_internal_product_service tests.test_publish_capacity_service -v` 15/15 通过。Web tsc --noEmit 通过；未做真实 MySQL/平台验收。
 - CR01 已提交 807826f；CR02 本次独立提交，未 push。CR03 实现已落盘，完整移动类型检查仍缺依赖，待单独记录提交。
+
+### 2026-09-29：CR03 移动端历史商品入口实现（随本次提交，完整构建待验证）
+
+- 商品管理和卡券商品选择页增加默认关闭的“显示历史商品”，两个 wrapper 显式传 show_history；切换筛选重置分页，旧请求的响应/错误/加载状态均隔离。展示来源及账号，历史行不进入跨账号批量关联，现有单件操作要求选中所属账号。
+- 涉及 xianyu-mobile/api/wrappers/items.ts、products.ts 和 app/(tabs)/mine/items.tsx、card-item-relation.tsx，仅四文件。
+- 验证：四文件 TypeScript 转译语法及 diff --check 通过；子代理内存 mock 验证参数/分页/竞态/历史保护。主代理完整 tsc 实际失败：TS6053 缺 expo/tsconfig.base；TS5103 借用 Web 的 TypeScript 5.9.3 不支持移动配置 ignoreDeprecations=6.0。移动依赖未安装，未安装替代版本或改配置掩盖问题，未产出 APK。
+- CR03 状态为已实现待验证；R07/R11 整体仍进行中。CR02 已独立提交 2ab95e5；本修改也独立提交，不 push。下一步接入按内部商品的五档排程，同时补移动依赖和完整验收。

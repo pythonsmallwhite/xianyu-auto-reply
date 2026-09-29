@@ -1,4 +1,5 @@
 import { getApiClient, extractError } from './client';
+import type { XianyuItem } from './items';
 
 // ---------------------------------------------------------------------------
 // 类型定义（与任务规格保持一致）
@@ -139,6 +140,7 @@ export interface ProductItem {
   item_sku_count?: number;
   is_seller_item?: boolean;
   item_shelf_time?: string;
+  source_category?: XianyuItem['source_category'];
 }
 
 export interface DeliveryBlockRule {
@@ -668,6 +670,7 @@ function normalizeProductItem(raw: Record<string, unknown>): ProductItem {
     title: str(raw.title ?? raw.item_title),
     price: str(raw.price ?? raw.item_price, '0'),
     cookie_id: str(raw.cookie_id ?? raw.account_id),
+    source_category: raw.source_category as ProductItem['source_category'],
   };
 }
 
@@ -680,10 +683,11 @@ function normalizeProductItem(raw: Record<string, unknown>): ProductItem {
 export async function getProductItems(
   page: number,
   pageSize: number,
+  showHistory: boolean = false,
 ): Promise<{ data: ProductItem[]; total: number }> {
   const client = await getApiClient();
   const { data } = (await (client.GET as any)('/api/v1/items/paginated', {
-    params: { query: { page, page_size: pageSize } },
+    params: { query: { page, page_size: pageSize, show_history: showHistory } },
   })) as { data?: unknown; error?: unknown };
   const inner = unwrapData<unknown>(data);
   let arr: unknown[] = [];
