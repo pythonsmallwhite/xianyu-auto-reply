@@ -312,7 +312,11 @@ export function BatchPublish() {
       ])
       setReservations(reservationResponse.data || [])
       setAccounts(accountList)
-      addToast({ type: 'success', message: '对账结果已保存' })
+      addToast({
+        type: response.data?.binding_status === 'failed' ? 'warning' : 'success',
+        message: response.data?.binding_message || '对账结果已保存',
+      })
+      void loadHistory()
     } catch (error) {
       addToast({ type: 'error', message: error instanceof Error ? error.message : '对账失败' })
     } finally {

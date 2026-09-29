@@ -59,3 +59,9 @@
 - 先前持久发布子任务已本地提交 32fdcf9，未 push；本修复独立提交，仅含容量服务、回归测试及此记录。
 - 验证：托管 Python 隔离环境 `-B -m unittest tests.test_publish_capacity_service -v` 8/8 通过，包含两小时前失败预留重新领取后立即人工释放被拒绝；剩余/预留数量保持 2/1。未接真实平台/MySQL。
 - CR01 已修复并离线验证；CR02/CR03 继续处理，R02 整体仍进行中。
+
+### 2026-09-29：CR02 人工成功对账关联修复（随本次提交）
+
+- 人工确认发布成功后调用已有幂等商品关联服务，以日志的素材 ID 和精确平台商品 ID 建立内部关联；不再次发布。对账和额度事务先提交，关联失败保留已确认结果，返回单独的 binding_status/binding_message 并在 Web 显示警告。
+- 回归验证人工确认成功生成关联、订单正确占用库存、重复补关联不重复建记录，以及关联异常时额度只结算一次、发布成功不回退；库存与额度专项 `-B -m unittest tests.test_internal_product_service tests.test_publish_capacity_service -v` 15/15 通过。Web tsc --noEmit 通过；未做真实 MySQL/平台验收。
+- CR01 已提交 807826f；CR02 本次独立提交，未 push。CR03 实现已落盘，完整移动类型检查仍缺依赖，待单独记录提交。

@@ -262,7 +262,7 @@ export const resolveAccountPublishReservation = (
   reservationId: string,
   outcome: 'success' | 'failed',
   itemId?: string
-): Promise<ApiResponse> => post(
+): Promise<ApiResponse<{ binding_status?: 'success' | 'failed'; binding_message?: string }>> => post(
   `${COOKIE_PREFIX}/${encodeURIComponent(id)}/publish-capacity/reservations/${encodeURIComponent(reservationId)}/resolve`,
   { outcome, item_id: itemId || null }
 )

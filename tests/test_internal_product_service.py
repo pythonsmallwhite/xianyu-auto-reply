@@ -83,6 +83,14 @@ class InternalProductServiceTests(unittest.IsolatedAsyncioTestCase):
         cls.ProductMaterial = ProductMaterial
         cls.PublishLog = PublishLog
         cls.XYAccount = XYAccount
+        from common.models.publish_capacity_reservation import PublishCapacityReservation
+        cls.Reservation = PublishCapacityReservation
+        capacity_spec = importlib.util.spec_from_file_location(
+            "_capacity_reconciliation_under_test",
+            ROOT / "common/services/publish_capacity_service.py",
+        )
+        cls.capacity_module = importlib.util.module_from_spec(capacity_spec)
+        capacity_spec.loader.exec_module(cls.capacity_module)
 
     async def asyncSetUp(self):
         self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -99,10 +107,12 @@ class InternalProductServiceTests(unittest.IsolatedAsyncioTestCase):
                         self.ProductMaterial.__table__,
                         self.PublishLog.__table__,
                         self.XYAccount.__table__,
+                        self.Reservation.__table__,
                     ],
                 )
             )
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
+        self.enterContext(patch.object(self.capacity_module, "async_session_maker", self.sessions))
         self.session = self.sessions()
         self.addAsyncCleanup(self.session.close)
         self.service = self.Service(self.session)
@@ -241,6 +251,50 @@ class InternalProductServiceTests(unittest.IsolatedAsyncioTestCase):
             select(self.InternalProductListing)
         )).scalar_one()
         self.assertEqual((product.material_id, listing.item_id), (10, "platform-item-1"))
+
+    async def _seed_unknown_reservation(self):
+        await self._seed_material_and_logs(1)
+        account = await self.session.get(self.XYAccount, 1)
+        account.remaining_publish_capacity, account.reserved_publish_count = 2, 1
+        log = await self.session.get(self.PublishLog, 1)
+        log.status, log.item_id = "unknown", None
+        self.session.add(self.Reservation(
+            id="unknown-reservation", owner_id=1, account_id="account-1",
+            publish_log_id=1, status="unknown",
+        ))
+        await self.session.commit()
+
+    async def test_manual_success_binds_listing_and_order_occupies_inventory(self):
+        await self._seed_unknown_reservation()
+        result = await self.capacity_module.resolve_unknown_publish_reservation(
+            1, "account-1", "unknown-reservation", "success", "verified-item",
+        )
+        self.assertEqual((result["status"], result["binding_status"], result["reserved_publish_count"]),
+                         ("succeeded", "success", 0))
+        listing = (await self.session.scalars(select(self.InternalProductListing))).one()
+        binding = await self.service.bind_successful_publish_log(1, 1)
+        self.assertEqual(listing.id, binding.id)
+        await self.service.update_total_stock(1, listing.internal_product_id, 3)
+        snapshot = await self.service.apply_order_event(1, "account-1", "verified-item", "order-1", "placed")
+        self.assertEqual((snapshot["occupied"], snapshot["available"]), (1, 2))
+
+    async def test_manual_success_stays_confirmed_when_binding_fails(self):
+        await self._seed_unknown_reservation()
+        with patch.object(self.Service, "bind_successful_publish_log", side_effect=RuntimeError("offline failure")), \
+                patch.object(self.capacity_module, "logger"):
+            result = await self.capacity_module.resolve_unknown_publish_reservation(
+                1, "account-1", "unknown-reservation", "success", "verified-item",
+            )
+        self.assertEqual((result["status"], result["binding_status"]), ("succeeded", "failed"))
+        async with self.sessions() as session:
+            log = await session.get(self.PublishLog, 1)
+            account = await session.get(self.XYAccount, 1)
+            self.assertEqual((log.status, log.item_id), ("success", "verified-item"))
+            self.assertEqual((account.remaining_publish_capacity, account.reserved_publish_count), (1, 0))
+        # 明确成功只能补关联，不能重新消耗额度或重新发布。
+        await self.service.bind_successful_publish_log(1, 1)
+        listings = (await self.session.scalars(select(self.InternalProductListing))).all()
+        self.assertEqual(len(listings), 1)
 
     async def test_refund_hold_is_not_released_by_late_cancel_or_place(self):
         await self._seed_material_and_logs(1)

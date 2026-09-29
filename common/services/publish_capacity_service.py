@@ -4,6 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import timedelta
 
+from loguru import logger
 from sqlalchemy import func, select, update
 
 from common.db.session import async_session_maker
@@ -224,10 +225,25 @@ async def resolve_unknown_publish_reservation(
                     log.item_id = None
                     log.item_url = None
                     log.error_message = "用户核对平台后确认未发布"
-            return {
+            should_bind = outcome == "success" and log is not None and log.material_id is not None
+            log_id = reservation.publish_log_id
+            result = {
                 "id": reservation.id,
                 "status": reservation.status,
                 "item_id": reservation.item_id,
                 "remaining_publish_capacity": account.remaining_publish_capacity,
                 "reserved_publish_count": account.reserved_publish_count,
             }
+        # 对账及额度先提交；商品关联失败不能回滚已核实的平台结果。
+        if should_bind:
+            try:
+                from common.services.internal_product_service import InternalProductService
+
+                await InternalProductService(session).bind_successful_publish_log(owner_id, log_id)
+                result["binding_status"] = "success"
+            except Exception:
+                await session.rollback()
+                logger.exception("发布对账已成功，内部商品关联待补齐: log_id={}", log_id)
+                result["binding_status"] = "failed"
+                result["binding_message"] = "发布已确认成功，但内部商品关联失败，请在内部商品管理中补关联"
+        return result
