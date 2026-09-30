@@ -1,6 +1,6 @@
 # 项目需求与 AI 交接文档
 
-更新时间：2026-09-30（Asia/Shanghai；main / 8a60b7f；主协调新一轮及三个 worker 已生效 auto_review，原 Run 继续；原会话只读）
+更新时间：2026-09-30（Asia/Shanghai；main / 8eb279c；原 Run 的聊天新终端 retry 已接受输入并 Working；原会话只读）
 
 > 发给下一位 AI 的统一入口，每轮开发结束必须更新。已收录需求确认稿 v0.5 全文及后续口径；原文中的建议和待定项不等于用户已确认需求。
 
@@ -126,6 +126,7 @@
 - Worker B：task_35ba85f0c3cc / ctx_2604c8b0648b，codex/ubuntu-deploy-0930，scripts/deploy-ubuntu.sh、docker/ubuntu*、部署文档/测试；业务源码和数据库只读，既有 Compose 不改。目标为源码部署、升级、备份恢复及离线验证，未授权上线部署。
 - Worker C：task_5a1ca361abd3 / ctx_08415b6833c1，codex/chat-viewport-0930，frontend/src/pages/chat-new/、仅 chat 样式和新增浏览器验收；目标为本地 API/WS 替身的桌面/390/320 窄屏交互、重连和迟到响应验证，必要局部修复；后端/移动端/商品 UI 只读。
 - 下一步第一件事：处理 Run inbox 的 question/escalation/worker_done，逐任务审查成果与实际测试，再集成本地 main；成功/失败结局均需明确，不凭派发回执判断完成。没有 push、上线部署或真实平台操作。
+- 用户随后两次明确“继续”，未选择切回人工审批。保留 auto_review：共同基线 e2e2953 和交接提交 8eb279c 已本地保存（main ahead 12）。旧终端正式 retry A `ctx_bd6a50fd455c`、C `ctx_6e980dd24511` 都在 agent_readiness 超时且 residualResources=[]，未执行任务；不删除旧工作树。基于已证明失败的 C attempt，创建同一工作树的新终端 `term_8d8efd89-fb5d-454e-9ffe-269f9fd819b3`，显式 --approve-for-me / gpt-6.1-sol / xhigh，tui-idle 后以原 Task `task_5a1ca361abd3` retry 派发新 Dispatch `ctx_7fd92777116a`，回执 input_accepted 且终端已输出 Working/读取规范。该新 attempt 仍进行中，不能声称浏览器验证通过；A/B 不自动重复派发。
 - 当前执行边界：A 已确认 Windows 与 Ubuntu-24.04 WSL 无现成 MySQL/container，按任务交付隔离测试库 harness，真实 MySQL 不记通过；A 的迁移测试已新增，补丁未落盘或审批中断的测试不记完成。B/C 已按原任务继续，仍有自动审批超时，超时命令不计执行；C 的本地 Node/Vite/Playwright 升级执行请求已通过 Orca reply 明确继续授权，收件批次 delivery_1e298aa9fe69 已处理/ack。三个 Dispatch 尚未返回 worker_done，均保持进行中，集成尚未开始。
 - 执行环境阻塞已确认：主协调三条只读升级执行及三个 worker 均返回 automatic permission approval review deadline；依赖检查仅重试一次仍失败。只读读取自动审查最终结果发现一条 outcome=allow，但开始到答复耗时 738.924 秒（约 12 分钟），不能把超时当作未开启 auto_review 或不安全判断。已通知 A/B/C 保留文件/原 Dispatch、不反复重试，新的 question 已回复，delivery_20d609559ea6 与心跳批次已 ack。正在等待用户选择保留自动模式保存停点或临时人工审批；未自行切回人工或更改全局配置。
 
@@ -368,6 +369,7 @@
 - 本轮尚未新增业务验证/功能提交，主目录仅协作规则和交接文档改动；下一步处理实际 worker 结果并审查验证后集成 main。既有 Python 52/52、Node 下架 68/68、移动回执/tsc 为前一运行轮证据，未冒充本轮新结果。
 - 后续检查确认当前阻塞为自动审查响应延迟：主协调只读检查超时，一次重试仍超时；已有自动审查最终 allow 耗时 738.924 秒。用户的执行方式选择仍待回答；没有把任何超时命令记为通过，也未终止 worker、重复派发、集成、push 或部署。
 - 本轮最终收尾：B `ctx_2604c8b0648b` 已 `worker_done --outcome failed`，没有部署文件、测试或提交；A `ctx_ce4084de84fb` 已 `worker_done --outcome failed`，仅独立工作树留下未提交 `tests/test_mysql_queue_migrations.py`，两次 Python 回归因基础环境缺 SQLAlchemy 未进入业务断言，真实 MySQL/容器不可用；C `ctx_08415b6833c1` 已 `worker_done --outcome failed`，未改聊天源码，留下未提交 `docs/orca/chat-viewport.md` 与工作树 `PROJECT_STATE.md`，真实浏览器/Playwright、Vite/WS harness、截图、六组 Node 和 Web tsc 均未运行。三个 Dispatch 均未合并 main；B/A 已结算并保留外部工作树，C 已结算并保留外部工作树。
+- 续接记录：用户继续后旧 A/C 终端 retry 在 agent_readiness 超时，已核对无残余资源且无未处理 inbox；随后同一 C 工作树的新终端以 --approve-for-me 及原 Task 正式 retry 成功，`ctx_7fd92777116a` 正在执行。下一步消费新 Dispatch 的 question/escalation/worker_done，审查实际浏览器 evidence，再决定是否集成。新 attempt 尚无验证或功能提交，不将前一失败报告状态当作新完成证据。
 - C 报告确认的只读依赖 junction 位于其工作树 `frontend/node_modules`，目标为主目录既有依赖；未安装依赖、未修改目标。它可作为下一轮恢复线索，不能算浏览器验收。A 的 `tests/test_mysql_queue_migrations.py` 目前只在 worker 工作树，未纳入主目录或提交；其测试暴露当前 `ensure_queue_indexes` 入口尚未有已验证实现，不应直接合并为功能。
 
 ### 2026-09-30：新会话继续共同基线
