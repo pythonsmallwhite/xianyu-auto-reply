@@ -138,7 +138,7 @@ class WsManager {
     connection.ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        if (data.type === 'new_message' && data.cid && data.message) {
+        if (data.event === 'new_message' && data.cid && data.message) {
           logger.debug('WS', `新消息: accountId=${accountId} cid=${data.cid}`);
           this.messageListeners.forEach((fn) =>
             fn(accountId, data.cid, data.message as ChatMessage),

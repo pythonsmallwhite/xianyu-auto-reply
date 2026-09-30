@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { Card, EmptyState, Badge, Loading } from '@/components/ui';
+import { Card, EmptyState, Badge, Loading, Button } from '@/components/ui';
 import { Package, Ticket } from 'lucide-react-native';
 import { colors, spacing, typography, radius } from '@/lib/theme';
 import { getXianyuItems, type XianyuItem } from '@/api/wrappers/items';
@@ -266,6 +266,7 @@ export default function ItemsScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['left', 'right', 'bottom']}>
+      <Button label="关联商品延迟下架" onPress={() => router.push('/(tabs)/mine/offline-batches' as any)} />
       {/* 账号选择（胶囊横滑） */}
       <View style={[styles.accountBar, { borderBottomColor: c.borderLight }]}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRowScroll}>

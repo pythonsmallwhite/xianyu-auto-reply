@@ -1,0 +1,6 @@
+interface:
+  display_name: "项目自动交接"
+  short_description: "开发阶段结束自动保存需求、进度、验证和下一步，方便跨 AI 接续"
+  default_prompt: "使用 $project-handoff 核对项目现状，并在本轮结束前自动更新 PROJECT_STATE.md。"
+policy:
+  allow_implicit_invocation: true

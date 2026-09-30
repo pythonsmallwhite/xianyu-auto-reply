@@ -45,6 +45,7 @@ from common.models.product_material import ProductMaterial
 from common.models.publish_log import PublishLog
 from common.models.publish_batch import PublishBatch, PublishBatchAccount, PublishBatchTarget, PublishBatchAttempt
 from common.models.publish_batch_schedule import PublishProductSchedule
+from common.models.listing_action import ListingActionBatch, ListingActionTarget, ListingActionAttempt
 from common.models.internal_product import InternalProduct, InternalProductListing, InventoryOrderHold
 from common.models.publish_capacity_reservation import PublishCapacityReservation
 from common.models.publish_address import PublishAddress
@@ -124,6 +125,9 @@ __all__ = [
     "PublishBatchTarget",
     "PublishBatchAttempt",
     "PublishProductSchedule",
+    "ListingActionBatch",
+    "ListingActionTarget",
+    "ListingActionAttempt",
     "InternalProduct",
     "InternalProductListing",
     "InventoryOrderHold",

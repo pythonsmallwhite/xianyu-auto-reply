@@ -62,7 +62,7 @@ const walkUntil = (node) => {
 };
 walkUntil(detailTree);
 
-const NEEDED_FNS = ['isLocalMessage', 'isEchoOf', 'mergeMessages'];
+const NEEDED_FNS = ['isLocalMessage', 'isEchoOf', 'mergeMessages', 'applySendReceipt'];
 for (const name of NEEDED_FNS) {
   assert.ok(capturedFns[name], `未在 [id].tsx 中找到函数 ${name}`);
 }
@@ -77,6 +77,7 @@ const mergePrelude = [
   capturedFns.isLocalMessage,
   capturedFns.isEchoOf,
   capturedFns.mergeMessages,
+  capturedFns.applySendReceipt,
 ].join('\n');
 
 // 抽取出的片段仍带 TS 类型注解，必须在 vm 执行前转译（不能用 eval 直接跑 TS）
@@ -162,6 +163,41 @@ scenario('A5', '历史分页头部插入不重复且顺序稳定', () => {
   );
 });
 
+scenario('A7', '两个本地占位只能一对一吸收真实回声', () => {
+  const local1 = msg({messageId: 'local-1'}), local2 = msg({messageId: 'local-2', time: 1000100});
+  const real = msg({messageId: 'real', time: 1000200});
+  const merged = mergeMessages([local1, local2], [real]);
+  assert.equal(merged.length, 2);
+  assert.equal(new Set(merged.map(m => m.messageId)).size, 2);
+  assert.equal(merged.filter(m => m.messageId.startsWith('local-')).length, 1);
+  const repeated = mergeMessages(merged, [real]);
+  assert.equal(repeated.filter(m => m.messageId.startsWith('local-')).length, 1, '重复回声不能吸收另一个占位');
+});
+scenario('A8', '失败消息和不同图片不能被同文回声吸收', () => {
+  const failed = msg({messageId: 'local-fail', failed: true});
+  assert.equal(mergeMessages([failed], [msg({messageId: 'real'})]).length, 2);
+  const local = msg({messageId: 'local-img', type: 'image', text: '', images: ['file://a']});
+  const real = msg({messageId: 'real-img', type: 'image', text: '', images: ['https://cdn/b']});
+  assert.equal(mergeMessages([local], [real]).length, 2);
+});
+scenario('A9', '补拉与推送交错保持时间顺序', () => {
+  const old = msg({messageId: 'old', time: 100}), latest = msg({messageId: 'latest', time: 300});
+  const missed = msg({messageId: 'missed', time: 200});
+  assert.deepEqual(mergeMessages([old, latest], [old, missed]).map(m => m.messageId), ['old', 'missed', 'latest']);
+});
+
+scenario('A10', '回执精确替换延迟占位，回声先到也不重复', () => {
+  const local = msg({messageId:'local-img', type:'image', text:'', images:['file://a']});
+  const echo = msg({messageId:'real-img', type:'image', text:'', images:['https://cdn/a'], time:1060000});
+  const receipt = {messageId:'real-img', imageUrl:'https://cdn/a'};
+  const confirmed = Array.from(mergeCtx.applySendReceipt([local], 'local-img', receipt));
+  assert.equal(confirmed[0].messageId, 'real-img');
+  assert.deepEqual(Array.from(confirmed[0].images), ['https://cdn/a']);
+  assert.equal(mergeMessages(confirmed, [echo]).length, 1);
+  const echoFirst = Array.from(mergeCtx.applySendReceipt([local, echo], 'local-img', receipt));
+  assert.deepEqual(echoFirst.map(m => m.messageId), ['real-img']);
+  assert.equal(mergeCtx.applySendReceipt([local], 'local-img', {}).length, 1);
+});
 scenario('A6', '他人消息不参与占位吸收，超出窗口不吸收', () => {
   const otherEcho = msg({ messageId: 'plat-9', isSelf: false, senderId: 'buyer' });
   const merged = mergeMessages([], [otherEcho]);
@@ -375,6 +411,17 @@ scenario('B5', '多账号重连互不串扰', () => {
   h.fireReconnect();
   h.openLatest();
   assert.deepEqual(h.events, ['acc-1'], '只应通知真正重连的账号');
+});
+
+scenario('B7', '后端 event 格式按账号和会话分发文字图片', () => {
+  const h = setupWs(); const received = [];
+  h.manager.onMessage((accountId, cid, message) => received.push([accountId, cid, message.type]));
+  h.manager.connect('acc-1'); const first = h.openLatest();
+  h.manager.connect('acc-2'); const second = h.openLatest();
+  first.onmessage({data: JSON.stringify({event:'new_message', cid:'c1', message:{type:'text'}})});
+  second.onmessage({data: JSON.stringify({event:'new_message', cid:'c2', message:{type:'image'}})});
+  first.onmessage({data: JSON.stringify({event:'connected'})});
+  assert.deepEqual(received, [['acc-1','c1','text'],['acc-2','c2','image']]);
 });
 
 scenario('B6', '前台恢复触发的重连也触发补拉', () => {

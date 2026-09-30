@@ -267,8 +267,9 @@ export function ChatNew() {
       if (!duplicated) accepted.push(msg)
     }
 
-    if (mode === 'replace') return accepted
-    return mode === 'append' ? [...existing, ...accepted] : [...accepted, ...existing]
+    // 历史接口返回的是一页快照，不能据此删除已有历史或请求期间的推送。
+    const merged = mode === 'prepend' ? [...accepted, ...existing] : [...existing, ...accepted]
+    return merged.sort((a, b) => a.time - b.time)
   }, [])
 
   /** 追加消息到消息列表（按 messageId 去重） */
@@ -662,7 +663,7 @@ export function ChatNew() {
           // 历史消息前置，按 id 去重避免与实时推送重叠
           setMessages((prev) => mergeMessages(prev, res.messages, 'prepend'))
         } else {
-          // 覆盖式刷新同样按 id 去重，避免接口重复返回导致 key 冲突
+          // 首屏快照也与在途推送合并，不能清掉已收到的消息
           setMessages((prev) => mergeMessages(prev, res.messages, 'replace'))
         }
         setMsgHasMore(res.hasMore)

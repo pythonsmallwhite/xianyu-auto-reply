@@ -107,12 +107,12 @@ export async function sendMessage(
   cid: string,
   toUserId: string,
   text: string,
-): Promise<{ success: boolean; message?: string }> {
+): Promise<{ success: boolean; message?: string; data?: { messageId?: string } }> {
   const client = await getApiClient();
   const { data, error } = (await (client.POST as any)(
     `/api/v1/chat-new/send-message/${accountId}`,
     { body: { cid, toUserId, text } },
-  )) as { data?: { success: boolean; message?: string }; error?: unknown };
+  )) as { data?: { success: boolean; message?: string; data?: { messageId?: string } }; error?: unknown };
   if (error) throw await extractError(error);
   return data ?? { success: false };
 }
@@ -189,7 +189,7 @@ export async function sendImageMessage(
   cid: string,
   toUserId: string,
   uri: string,
-): Promise<void> {
+): Promise<{ messageId?: string; imageUrl?: string }> {
   const client = await getApiClient();
 
   // 从 uri 推断扩展名与 MIME 类型
@@ -210,9 +210,13 @@ export async function sendImageMessage(
   formData.append('cid', cid);
   formData.append('toUserId', toUserId);
   // RN FormData 文件字段需要 { uri, name, type } 结构
-  formData.append('file', { uri, name: filename, type: mimeType } as any);
+  formData.append('image', { uri, name: filename, type: mimeType } as any);
 
-  await (client.POST as any)(`/api/v1/chat-new/send-image/${accountId}`, {
+  const { data, error } = await (client.POST as any)(`/api/v1/chat-new/send-image/${accountId}`, {
     body: formData,
+    bodySerializer: (body: FormData) => body,
   });
+  if (error) throw await extractError(error);
+  if (!data?.success) throw new Error(data?.message || '图片发送失败');
+  return data.data ?? {};
 }

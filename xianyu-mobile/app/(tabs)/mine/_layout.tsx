@@ -38,6 +38,7 @@ export default function MineStackLayout() {
       <Stack.Screen name="monitor-fallback" options={{ title: '兜底账号' }} />
       <Stack.Screen name="product-publish" options={{ title: '商品发布' }} />
       <Stack.Screen name="items" options={{ title: '商品管理' }} />
+      <Stack.Screen name="offline-batches" options={{ title: '关联商品延迟下架' }} />
       <Stack.Screen name="item-edit" options={{ title: '编辑商品' }} />
       <Stack.Screen name="shared-scan" options={{ title: '共享扫码' }} />
       <Stack.Screen name="settings" options={{ title: '系统设置' }} />

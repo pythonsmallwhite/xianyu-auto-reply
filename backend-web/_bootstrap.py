@@ -142,11 +142,15 @@ async def lifespan(app: FastAPI):
     from app.services.durable_publish_batch_service import run_pending_batches_forever
     publish_worker_stop = asyncio.Event()
     publish_worker_task = asyncio.create_task(run_pending_batches_forever(publish_worker_stop))
+    from common.services.listing_action_service import run_forever as run_listing_actions
+    listing_worker_task = asyncio.create_task(run_listing_actions(publish_worker_stop))
     try:
         yield
     finally:
         publish_worker_stop.set()
         publish_worker_task.cancel()
+        listing_worker_task.cancel()
+        await asyncio.gather(listing_worker_task, return_exceptions=True)
         try:
             await publish_worker_task
         except asyncio.CancelledError:

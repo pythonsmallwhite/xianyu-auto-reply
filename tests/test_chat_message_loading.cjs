@@ -80,5 +80,8 @@ const apply = (prev, response) => {
   );
   // replace 也必须去重，避免接口重复返回导致渲染 key 冲突
   assert.deepEqual(merge([], [pushed, {...pushed}], 'replace'), [pushed], '全量替换同样需要去重');
+  assert.deepEqual(merge([pushed], [{...pushed}], 'replace'), [pushed], '快照重叠不能删除已有消息');
+  const during = {...pushed, messageId: 'during', time: 2000};
+  assert.deepEqual(merge([during], [pushed], 'replace'), [pushed, during], '快照请求期间推送必须保留且正序');
   console.log('PASS: stale success/error/loading do not overwrite another conversation');
 })().catch(error => { console.error(error); process.exitCode = 1; });

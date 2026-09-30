@@ -77,8 +77,13 @@ function isEchoOf(local: ChatMessage, real: ChatMessage): boolean {
     && isLocalMessage(real) === false
     && local.isSelf
     && real.isSelf
+    && !local.failed
+    && !real.failed
     && local.type === real.type
     && local.text === real.text
+    // 本地文件 URI 与 CDN URL 无法靠空文本关联，等待明确回执。
+    && (local.type !== 'image' || (local.images.length > 0
+      && JSON.stringify(local.images) === JSON.stringify(real.images)))
     && Math.abs(local.time - real.time) < LOCAL_ECHO_WINDOW_MS;
 }
 
@@ -88,35 +93,45 @@ function isEchoOf(local: ChatMessage, real: ChatMessage): boolean {
  * 去重键为平台 messageId。本地乐观占位（尚无平台 ID）允许被同内容的
  * 真实回声原地替换，避免自己刚发的消息同时出现“本地一条 + 回声一条”。
  *
- * 吸收只发生在 local→real 方向，且是原地替换而非删除后追加，
- * 因此不会改变气泡顺序。吸收失败最多多显示一条本地占位，
+ * 吸收只发生在 local→real 方向，一个新平台 ID 至多替换一个占位，
+ * 最终按消息时间稳定排序。吸收失败最多多显示一条本地占位，
  * 不会丢失真实消息，属于安全方向的降级。
  */
 function mergeMessages(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
-  const incomingReals = incoming.filter((m) => !isLocalMessage(m));
-
-  // 已有列表中被真实回声吸收的占位：原地替换为首个吸收它的真实消息
-  const result = existing.map((msg) => {
-    if (!isLocalMessage(msg)) return msg;
-    const absorber = incomingReals.find((real) => isEchoOf(msg, real));
-    return absorber ?? msg;
-  });
-
+  const result: ChatMessage[] = [];
+  const seenIds = new Set<string>();
+  for (const msg of existing) {
+    if (msg.messageId && seenIds.has(msg.messageId)) continue;
+    if (msg.messageId) seenIds.add(msg.messageId);
+    result.push(msg);
+  }
   for (const msg of incoming) {
-    // 真实消息按稳定 ID 去重（占位替换后该 ID 已在列表中）
-    if (!isLocalMessage(msg) && result.some((m) => m.messageId === msg.messageId)) continue;
-    if (isLocalMessage(msg)) {
-      // 入参里的本地占位：若已有真实回声（本次或历史）则丢弃，否则追加
-      const absorbed =
-        incomingReals.some((real) => isEchoOf(msg, real)) ||
-        existing.some((real) => isEchoOf(msg, real));
-      if (absorbed) continue;
-      result.push(msg);
-      continue;
+    if (msg.messageId && seenIds.has(msg.messageId)) continue;
+    if (msg.messageId) seenIds.add(msg.messageId);
+    if (!isLocalMessage(msg)) {
+      // 每个新平台 ID 至多替换一个占位；重复回声不能再次消费另一个占位。
+      const index = result.findIndex((local) => isEchoOf(local, msg));
+      if (index >= 0) {
+        result[index] = msg;
+        continue;
+      }
     }
     result.push(msg);
   }
-  return result;
+  return result.sort((a, b) => a.time - b.time);
+}
+
+/** 用发送回执精确替换本地占位；回声已到达时只移除该占位。 */
+function applySendReceipt(existing: ChatMessage[], localId: string, receipt: { messageId?: string; imageUrl?: string }): ChatMessage[] {
+  if (!receipt.messageId) return existing;
+  const local = existing.find((msg) => msg.messageId === localId);
+  if (!local) return existing;
+  const rest = existing.filter((msg) => msg.messageId !== localId);
+  if (rest.some((msg) => msg.messageId === receipt.messageId)) return rest;
+  return [...rest, {
+    ...local, messageId: receipt.messageId, failed: false, failReason: undefined,
+    images: receipt.imageUrl ? [receipt.imageUrl] : local.images,
+  }].sort((a, b) => a.time - b.time);
 }
 
 /** 距底部多少像素内仍视为“贴底”，用于决定新消息是否自动滚动 */
@@ -274,7 +289,7 @@ export default function ChatDetailScreen() {
     try {
       const resp = await getMessages(account_id, id, null);
       // 不触碰 cursorRef / hasMoreRef：补拉只对齐最新页，不能影响历史分页位置
-      setMessages((prev) => mergeMessages(resp.messages, prev));
+      setMessages((prev) => mergeMessages(prev, resp.messages));
     } catch (e) {
       console.error('补拉最新消息失败', e);
     }
@@ -336,6 +351,7 @@ export default function ChatDetailScreen() {
     try {
       const res = await sendMessage(account_id, id, buyer_id, text);
       if (!res.success) markFailed(optimisticMsg.messageId, res.message || '发送失败');
+      else if (res.data) setMessages((prev) => applySendReceipt(prev, optimisticMsg.messageId, res.data!));
     } catch (e) {
       markFailed(optimisticMsg.messageId, (e as Error).message);
     } finally {
@@ -364,6 +380,7 @@ export default function ChatDetailScreen() {
     try {
       const res = await sendMessage(account_id, id, buyer_id, text);
       if (!res.success) markFailed(optimisticMsg.messageId, res.message || '发送失败');
+      else if (res.data) setMessages((prev) => applySendReceipt(prev, optimisticMsg.messageId, res.data!));
     } catch (e) {
       markFailed(optimisticMsg.messageId, (e as Error).message);
     } finally {
@@ -399,7 +416,8 @@ export default function ChatDetailScreen() {
     setMessages((prev) => [...prev, optimisticMsg]);
 
     try {
-      await sendImageMessage(account_id, id, buyer_id, uri);
+      const receipt = await sendImageMessage(account_id, id, buyer_id, uri);
+      setMessages((prev) => applySendReceipt(prev, optimisticMsg.messageId, receipt));
     } catch (e) {
       markFailed(optimisticMsg.messageId, (e as Error).message);
     } finally {

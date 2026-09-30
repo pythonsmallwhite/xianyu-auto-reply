@@ -2171,6 +2171,14 @@ class DatabaseInitializer:
         "xy_token_cache": [
             ("renew_expire_at", "DATETIME DEFAULT NULL COMMENT '续期Token过期时间'", "expire_at"),
         ],
+        # 商品操作目标表由模型生成 DDL 建表（checkfirst 只建缺失的表，不会补字段），
+        # 早期版本已建过该表，人工核对字段必须在这里补齐，否则升级后静默缺失。
+        "xy_listing_action_targets": [
+            ("reconciled_state", "VARCHAR(20) DEFAULT NULL COMMENT '人工核对的平台实际状态'", "retry_batch_id"),
+            ("reconciled_note", "VARCHAR(500) DEFAULT NULL COMMENT '人工核对依据'", "reconciled_state"),
+            ("reconciled_at", "DATETIME(6) DEFAULT NULL COMMENT '人工核对时间'", "reconciled_note"),
+            ("reconciled_conflict", "TINYINT(1) DEFAULT NULL COMMENT '人工核对时本地状态冲突'", "reconciled_at"),
+        ],
         "xy_product_materials": [
             ("platform_category_id", "VARCHAR(64) DEFAULT NULL COMMENT '平台末级分类ID（catId）'", "category"),
             ("platform_category_name", "VARCHAR(100) DEFAULT NULL COMMENT '平台末级分类名称（catName）'", "platform_category_id"),
@@ -2455,6 +2463,12 @@ class DatabaseInitializer:
                 except Exception as e:
                     logger.warning(f"✗ 表 {table_name} 创建失败: {describe_ddl_error(e)}")
         
+        # 新的商品操作表由其模型生成 DDL；失败必须中止启动，不能带缺表启动 worker。
+        from common.models.listing_action import ListingActionBatch, ListingActionTarget, ListingActionAttempt
+        async with ddl_connection() as conn:
+            for model in (ListingActionBatch, ListingActionTarget, ListingActionAttempt):
+                await conn.run_sync(lambda sync, table=model.__table__: table.create(sync, checkfirst=True))
+
         logger.info(f"数据表创建完成，共 {len(self.TABLES_DDL)} 张表")
         
         # 执行字段迁移
@@ -2558,6 +2572,10 @@ class DatabaseInitializer:
                                              "available_at", "request_started_at", "lease_expires_at"),
                 "xy_publish_batch_attempts": ("window_started_at", "scheduled_at", "deadline_at", "request_started_at"),
                 "xy_publish_product_schedules": ("last_request_started_at", "lease_expires_at"),
+                "xy_listing_action_batches": ("deadline_at",),
+                "xy_listing_action_targets": ("scheduled_at", "available_at", "request_started_at",
+                                             "lease_expires_at", "finished_at", "reconciled_at"),
+                "xy_listing_action_attempts": ("request_started_at", "finished_at"),
             }
             for table_name, column_names in schedule_time_columns.items():
                 for column_name in column_names:
