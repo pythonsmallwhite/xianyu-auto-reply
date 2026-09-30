@@ -1,6 +1,6 @@
 # 项目需求与 AI 交接文档
 
-更新时间：2026-09-30（Asia/Shanghai；共同基线 e2e2953 已提交，三个 Orca 独立工作树 worker 执行中；原 provider 会话只读）
+更新时间：2026-09-30（Asia/Shanghai；main / 8a60b7f；主协调新一轮及三个 worker 已生效 auto_review，原 Run 继续；原会话只读）
 
 > 发给下一位 AI 的统一入口，每轮开发结束必须更新。已收录需求确认稿 v0.5 全文及后续口径；原文中的建议和待定项不等于用户已确认需求。
 
@@ -16,7 +16,7 @@
 - 工作目录：D:\Myproject\xianyu-auto-reply。
 - 用户经常切换 AI，需要需求、状态、验证及下一步持续保存在文档中。
 - 2026-09-29 开发轮继续完成持久批量发布；独立审查固定 0f20e1d 的发现保留在交接历史，两轮验证范围分开记录。
-- 当前分支 main，检查时 HEAD 为 `e2e29537b788e16f457e06d084720fa901e68d95`，共同基线已本地提交，领先 origin/main 10 个提交。接管的 30 个明确源码/测试/协作文档及重复下架路由修正均已包含；没有 push。三个本地产物目录未暂存，全部保留。
+- 当前分支 main，检查时 HEAD 为 `8a60b7f`，领先 origin/main 11 个提交；共同基线为 `e2e29537b788e16f457e06d084720fa901e68d95`，8a60b7f 保存 Orca 派发检查点。30 个明确源码/测试/协作文档及重复下架路由修正已包含；没有 push。三个本地产物目录未暂存，全部保留。
 - 原开发基线为 1be6493c36f8c66547b91d3940ac32580b1937b9。旧交接记载用户要求直接在 main 开发；本轮明确授权改为 `codex/` 临时分支、独立工作树并行，主协调审查后集成 main。
 - 已从用户指定会话“阅读两个上下文”找回 v0.5 原文件，全文嵌入文末。来源：codex://threads/01a0e5e4-1873-7c10-aaa4-94567e3174d1。
 - 历史授权仅作为上下文，不自动扩大本轮操作范围。
@@ -55,6 +55,7 @@
 
 - 用户确认失败项重试采用“新开窗口”：重试请求必须重新选择 1、3、5、12、24 小时，只作用于明确失败项；成功、未知、跳过项不可重试。
 - 五档窗口创建和重试均不预选默认值，Web 与 Android 都必须显式选择窗口。
+- 用户本轮直接要求所有开发智能体（含主协调）启用 Approve for me，稳定协调项 `OC03`。新 worker 在原指定脚本/模型参数基础上追加 --approve-for-me；验收为实际上下文 approvals_reviewer=auto_review，保留 workspace-write 和既有授权边界。此口径覆盖此前本轮暂不改变审批设置的阶段表述，不修改全局配置或默认账号。
 
 ### 来源与后续口径
 
@@ -117,13 +118,16 @@
 ### 最新：新 Orca 会话继续接管（2026-09-30，本轮进行中）
 
 - 来源：用户继续指令及 `docs/ORCA_COORDINATOR_TASK.md`。`OC01` 已验证并提交为 e2e2953；`OC02` 进行中，三个真实 Orca 独立工作树已派发，后续审查与 main 集成待完成。
+- `OC03` 已验证：三个开发 worker 的实际会话上下文均为 on-request / auto_review，模型 gpt-6.1-sol；主协调上一运行轮仍为 reviewer=user，权限菜单虽显示 Approve for me (current)，用户中断后新一轮的生效执行配置已为 auto_review，且已出现 cwd 为主目录的自动审查内部进程。保持原 Run/Task/Dispatch 和工作树，无新建重复 worker，不再循环操控权限菜单。
 - Orca 1.4.215，Run `run_f7192cc83c24`，coordinator `term_b4a2a113-8e22-4243-a113-8768bbc67a07`。三个 worker 都基于共同基线完整 SHA，setup skip；实际分支均修正为 codex/ 前缀。使用指定 start-codex.cmd --no-daemon --model gpt-6.1-sol -c model_reasoning_effort=xhigh；终端实际显示 GPT-6.1-Sol xhigh，tui-idle 后派发，三个已输出 Working 和文件读取。自定义终端的 fleet 状态因 missing_status 为 unverifiable，不能仅凭 PTY 在线宣布任务完成。
 - 上一会话基线验证（历史证据）：Python 全套 141/141，0 失败/0 跳过，112.831 秒；六组 Node、双端类型检查通过。本会话提交前专项：`-B -m unittest tests.test_listing_actions tests.test_offline_api_http -q` 52/52，0 失败/0 跳过，34.950 秒；下架 UI 68/68、移动聊天回执/图片上传/补拉回调、Android 完整 `tsc --noEmit` 和暂存 diff 检查通过。MySQL、浏览器/真机、APK、平台、Ubuntu 尚未验证。
-- 基线 30 个明确文件已提交；main 只新增本轮交接进度，三个产物目录保持未跟踪。Windows 沙箱 1385 和 apply_patch reparse 误报使用获准正常用户环境处理，不改审批设置或默认 Codex 配置。Git 另有历史 .orca-preparing 锁定残留，基于旧 origin/main，本轮不触碰。
+- 基线及派发交接均已提交；主目录本轮只更新 AGENTS.md、协调任务启动参数和本文。三个产物目录保持未跟踪。Windows 沙箱 1385 和 apply_patch reparse 误报通过正常用户环境处理；用户批准的是会话 auto_review，不修改全局配置或默认账号。Git 另有历史 .orca-preparing 锁定残留，基于旧 origin/main，本轮不触碰。
 - Worker A：task_64593bab2be4 / ctx_ce4084de84fb，codex/mysql-acceptance-0930，文件范围为数据库初始化、指定 worker/model、tests/test_mysql*、scripts/mysql*、docs/orca/mysql-acceptance.md。目标为隔离 MySQL 迁移、精度、锁竞争/恢复及必要修复；无隔离实例则交付验收 harness 并如实记录环境阻塞。
 - Worker B：task_35ba85f0c3cc / ctx_2604c8b0648b，codex/ubuntu-deploy-0930，scripts/deploy-ubuntu.sh、docker/ubuntu*、部署文档/测试；业务源码和数据库只读，既有 Compose 不改。目标为源码部署、升级、备份恢复及离线验证，未授权上线部署。
 - Worker C：task_5a1ca361abd3 / ctx_08415b6833c1，codex/chat-viewport-0930，frontend/src/pages/chat-new/、仅 chat 样式和新增浏览器验收；目标为本地 API/WS 替身的桌面/390/320 窄屏交互、重连和迟到响应验证，必要局部修复；后端/移动端/商品 UI 只读。
 - 下一步第一件事：处理 Run inbox 的 question/escalation/worker_done，逐任务审查成果与实际测试，再集成本地 main；成功/失败结局均需明确，不凭派发回执判断完成。没有 push、上线部署或真实平台操作。
+- 当前执行边界：A 已确认 Windows 与 Ubuntu-24.04 WSL 无现成 MySQL/container，按任务交付隔离测试库 harness，真实 MySQL 不记通过；A 的迁移测试已新增，补丁未落盘或审批中断的测试不记完成。B/C 已按原任务继续，仍有自动审批超时，超时命令不计执行；C 的本地 Node/Vite/Playwright 升级执行请求已通过 Orca reply 明确继续授权，收件批次 delivery_1e298aa9fe69 已处理/ack。三个 Dispatch 尚未返回 worker_done，均保持进行中，集成尚未开始。
+- 执行环境阻塞已确认：主协调三条只读升级执行及三个 worker 均返回 automatic permission approval review deadline；依赖检查仅重试一次仍失败。只读读取自动审查最终结果发现一条 outcome=allow，但开始到答复耗时 738.924 秒（约 12 分钟），不能把超时当作未开启 auto_review 或不安全判断。已通知 A/B/C 保留文件/原 Dispatch、不反复重试，新的 question 已回复，delivery_20d609559ea6 与心跳批次已 ack。正在等待用户选择保留自动模式保存停点或临时人工审批；未自行切回人工或更改全局配置。
 
 ### 历史：人工核对、HTTP 与双端交互离线阶段收尾（2026-09-30）
 
@@ -355,6 +359,16 @@
 ```
 
 ## 9. 交接历史
+
+### 2026-09-30：审批模式生效后继续原 Run
+
+- 来源：用户要求全部智能体启用 Approve for me，指出主协调旧轮仍需审批，并主动中断开启新一轮；原 provider 会话及 transcript 只读。
+- 纠正启动遗漏：新 worker 使用原指定启动器并追加 --approve-for-me。三个 worker 实际上下文 auto_review 已核实；主协调新一轮生效配置 auto_review，OC03 已验证。AGENTS.md 和协调任务同步此规则，未改默认配置、账号或权限边界。
+- main / 8a60b7f（ahead 11），e2e2953 基线和三个原 Task/Dispatch 保留；A 无隔离 MySQL 按 fallback 交付 harness，B/C 原任务继续。自动审批仍有超时，不等于执行成功或明确拒绝；C 继续升级执行的 question 已回复并 ack。无 worker_done 或集成验证，OC02 仍进行中。
+- 本轮尚未新增业务验证/功能提交，主目录仅协作规则和交接文档改动；下一步处理实际 worker 结果并审查验证后集成 main。既有 Python 52/52、Node 下架 68/68、移动回执/tsc 为前一运行轮证据，未冒充本轮新结果。
+- 后续检查确认当前阻塞为自动审查响应延迟：主协调只读检查超时，一次重试仍超时；已有自动审查最终 allow 耗时 738.924 秒。用户的执行方式选择仍待回答；没有把任何超时命令记为通过，也未终止 worker、重复派发、集成、push 或部署。
+- 本轮最终收尾：B `ctx_2604c8b0648b` 已 `worker_done --outcome failed`，没有部署文件、测试或提交；A `ctx_ce4084de84fb` 已 `worker_done --outcome failed`，仅独立工作树留下未提交 `tests/test_mysql_queue_migrations.py`，两次 Python 回归因基础环境缺 SQLAlchemy 未进入业务断言，真实 MySQL/容器不可用；C `ctx_08415b6833c1` 已 `worker_done --outcome failed`，未改聊天源码，留下未提交 `docs/orca/chat-viewport.md` 与工作树 `PROJECT_STATE.md`，真实浏览器/Playwright、Vite/WS harness、截图、六组 Node 和 Web tsc 均未运行。三个 Dispatch 均未合并 main；B/A 已结算并保留外部工作树，C 已结算并保留外部工作树。
+- C 报告确认的只读依赖 junction 位于其工作树 `frontend/node_modules`，目标为主目录既有依赖；未安装依赖、未修改目标。它可作为下一轮恢复线索，不能算浏览器验收。A 的 `tests/test_mysql_queue_migrations.py` 目前只在 worker 工作树，未纳入主目录或提交；其测试暴露当前 `ensure_queue_indexes` 入口尚未有已验证实现，不应直接合并为功能。
 
 ### 2026-09-30：新会话继续共同基线
 

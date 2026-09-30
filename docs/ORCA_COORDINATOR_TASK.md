@@ -7,7 +7,7 @@
 
 运行 orca skills get orchestration 读取版本匹配指南，再按需要读取 coordinator-loop、placement-and-remote、low-level-topology 等指定 reference。使用真正 Orca orchestration run/task/dispatch/worker 和 inbox 生命周期调度，不用普通同目录 Codex subagents 代替独立工作树。项目 repo id 35886866-3cbf-4ec6-bfaf-66b674fc821b。新工作树必须基于你整理后的本地 main 或其明确 SHA。Orca 项目默认 setup 是根目录 npm install，需检查适用性；新工作树优先 --setup skip 后在正确子目录准备依赖，不盲跑根 npm install。
 
-所有 worker 必须使用 C:/Users/zhishang_hu/.codex/.codex-orca/start-codex.cmd，传 --no-daemon --model gpt-6.1-sol -c model_reasoning_effort=xhigh；不要退出桌面 Codex 账号，不改默认 .codex/config.toml/auth.json，不输出独立配置中的密钥。验证 Orca configured launcher 实际使用该命令；worker-start 不能表达时先读 low-level-topology 再用文档规定的自定义命令流程。新终端需等待 tui-idle 后投递；超时先检查残留，不重复创建。当前首次 terminal create 曾超时，未得到新 handle，现复用原主目录终端；不要盲目清理任何残留。
+所有开发 worker 必须使用 C:/Users/zhishang_hu/.codex/.codex-orca/start-codex.cmd，传 --no-daemon --approve-for-me --model gpt-6.1-sol -c model_reasoning_effort=xhigh；用户于 2026-09-30 明确要求主协调和全部开发 worker 使用 Approve for me，通过生效上下文 approvals_reviewer=auto_review 验证。自动审批内部审查进程不计入开发 worker 并发数。不要退出桌面 Codex 账号，不改默认 .codex/config.toml/auth.json，不输出独立配置中的密钥。验证 Orca configured launcher 实际使用该命令；worker-start 不能表达时先读 low-level-topology 再用文档规定的自定义命令流程。新终端需等待 tui-idle 后投递；超时先检查残留，不重复创建。历史首次 terminal create 曾超时，未得到新 handle；不要盲目清理任何残留。
 
 先核实后设计第一轮独立任务，建议方向仅作技术候选：
 A 隔离 MySQL 迁移、双 worker 竞争/恢复验收及必要修复；
