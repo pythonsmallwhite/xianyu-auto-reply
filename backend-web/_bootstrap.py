@@ -144,13 +144,16 @@ async def lifespan(app: FastAPI):
     publish_worker_task = asyncio.create_task(run_pending_batches_forever(publish_worker_stop))
     from common.services.listing_action_service import run_forever as run_listing_actions
     listing_worker_task = asyncio.create_task(run_listing_actions(publish_worker_stop))
+    from common.services.managed_item_edit_service import run_forever as run_managed_item_edits
+    managed_item_edit_task = asyncio.create_task(run_managed_item_edits(publish_worker_stop))
     try:
         yield
     finally:
         publish_worker_stop.set()
         publish_worker_task.cancel()
         listing_worker_task.cancel()
-        await asyncio.gather(listing_worker_task, return_exceptions=True)
+        managed_item_edit_task.cancel()
+        await asyncio.gather(listing_worker_task, managed_item_edit_task, return_exceptions=True)
         try:
             await publish_worker_task
         except asyncio.CancelledError:

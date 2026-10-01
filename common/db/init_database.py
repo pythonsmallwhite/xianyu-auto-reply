@@ -2465,8 +2465,9 @@ class DatabaseInitializer:
         
         # 新的商品操作表由其模型生成 DDL；失败必须中止启动，不能带缺表启动 worker。
         from common.models.listing_action import ListingActionBatch, ListingActionTarget, ListingActionAttempt
+        from common.models.managed_item_edit import ManagedItemEditBatch, ManagedItemEditTarget, ManagedItemEditAttempt
         async with ddl_connection() as conn:
-            for model in (ListingActionBatch, ListingActionTarget, ListingActionAttempt):
+            for model in (ListingActionBatch, ListingActionTarget, ListingActionAttempt, ManagedItemEditBatch, ManagedItemEditTarget, ManagedItemEditAttempt):
                 await conn.run_sync(lambda sync, table=model.__table__: table.create(sync, checkfirst=True))
 
         logger.info(f"数据表创建完成，共 {len(self.TABLES_DDL)} 张表")
