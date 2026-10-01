@@ -17,7 +17,7 @@ from typing import List, Optional
 
 import aiohttp
 from loguru import logger
-from sqlalchemy import delete as sql_delete, select
+from sqlalchemy import delete as sql_delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -28,6 +28,7 @@ from common.models.scheduled_polish_log import ScheduledPolishLog
 from common.utils.xianyu_utils import trans_cookies, generate_sign
 from common.utils.cookie_refresh import update_account_cookies_in_db
 from common.utils.time_utils import get_beijing_now_naive
+from common.utils.item_origin import origin_predicates
 
 
 class PolishTaskService:
@@ -295,9 +296,15 @@ class PolishTaskService:
         - account_pk = 指定账号ID
         - is_polished = False 或 NULL（未擦亮）
         """
-        stmt = select(XYCatalogItem).where(
-            XYCatalogItem.account_pk == account_pk,
-            (XYCatalogItem.is_polished == False) | (XYCatalogItem.is_polished == None),
+        managed, tool_published = origin_predicates()
+        stmt = (
+            select(XYCatalogItem)
+            .join(XYAccount, XYCatalogItem.account_pk == XYAccount.id)
+            .where(
+                XYAccount.id == account_pk,
+                (XYCatalogItem.is_polished == False) | (XYCatalogItem.is_polished == None),
+                or_(managed, tool_published),
+            )
         )
         result = await session.execute(stmt)
         return [
