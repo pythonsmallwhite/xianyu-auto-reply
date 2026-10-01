@@ -280,13 +280,33 @@ export interface ManagedItemEditTargetResult {
   account_id: string
   item_id: string
   status: 'pending' | 'running' | 'success' | 'failed' | 'unknown' | 'skipped'
+  scheduled_at?: string | null
+  available_at?: string | null
+  deadline_at?: string | null
+  request_started_at?: string | null
+  finished_at?: string | null
+  message?: string | null
+  retry_batch_id?: string | null
+}
+
+export interface ManagedItemEditAttemptResult {
+  id: number
+  target_id: number
+  status: 'running' | 'success' | 'failed' | 'unknown' | 'skipped'
+  request_started_at?: string | null
+  finished_at?: string | null
   message?: string | null
 }
 
 export interface ManagedItemEditResponse {
   batch_id: string
   status: 'pending' | 'running' | 'finished'
+  owner_id?: number
+  window_hours: 1 | 3 | 5 | 12 | 24
+  deadline_at?: string | null
+  payload_snapshot?: BatchSellerItemEditPatch
   targets?: ManagedItemEditTargetResult[]
+  attempts?: ManagedItemEditAttemptResult[]
 }
 
 export const createBatchSellerItemEdit = (

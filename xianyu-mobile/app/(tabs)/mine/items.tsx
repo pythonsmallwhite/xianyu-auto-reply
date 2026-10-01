@@ -33,6 +33,8 @@ export default function ItemsScreen() {
   const [accounts, setAccounts] = useState<AccountOption[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string>('');
   const [showHistory, setShowHistory] = useState(false);
+  const [batchSelectMode, setBatchSelectMode] = useState(false);
+  const [batchSelectedItems, setBatchSelectedItems] = useState<XianyuItem[]>([]);
   const [items, setItems] = useState<XianyuItem[]>([]);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
@@ -203,15 +205,48 @@ export default function ItemsScreen() {
     [handleEdit, handleDelete, canOperate],
   );
 
+  const toggleBatchItem = useCallback((item: XianyuItem) => {
+    if (!item.cookie_id || (item.source_category !== 'managed' && item.source_category !== 'tool_published_unlinked')) {
+      Alert.alert('无法批量编辑', '历史或来源待确认商品仅允许单件操作。');
+      return;
+    }
+    setBatchSelectedItems((previous) => {
+      const key = item.cookie_id + ':' + item.item_id;
+      const has = previous.some((entry) => entry.cookie_id + ':' + entry.item_id === key);
+      return has ? previous.filter((entry) => entry.cookie_id + ':' + entry.item_id !== key) : [...previous, item];
+    });
+  }, []);
+
+  const openBatchEdit = useCallback(() => {
+    if (!batchSelectedItems.length) {
+      Alert.alert('提示', '请先选择商品');
+      return;
+    }
+    const accountIds = new Set(batchSelectedItems.map((item) => item.cookie_id));
+    if (accountIds.size !== 1) {
+      Alert.alert('提示', '批量编辑必须选择同一账号的商品');
+      return;
+    }
+    router.push({
+      pathname: '/(tabs)/mine/item-edit',
+      params: {
+        cookieId: batchSelectedItems[0].cookie_id,
+        itemIds: batchSelectedItems.map((item) => item.item_id).join(','),
+      },
+    });
+    setBatchSelectMode(false);
+    setBatchSelectedItems([]);
+  }, [batchSelectedItems, router]);
+
   const accountLabel = (acc: AccountOption) => acc.remark || acc.id;
 
   const renderItem = ({ item }: { item: XianyuItem }) => (
     <Pressable
-      onPress={() => handleEdit(item)}
-      onLongPress={() => handleLongPress(item)}
+      onPress={() => batchSelectMode ? toggleBatchItem(item) : handleEdit(item)}
+      onLongPress={() => batchSelectMode ? toggleBatchItem(item) : handleLongPress(item)}
       style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
     >
-      <Card style={styles.card}>
+      <Card style={[styles.card, batchSelectMode && batchSelectedItems.some((entry) => entry.cookie_id === item.cookie_id && entry.item_id === item.item_id) ? { borderColor: c.primary, borderWidth: 1 } : null]}>
         <View style={styles.cardRow}>
           {item.image ? (
             <Image
@@ -266,7 +301,11 @@ export default function ItemsScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['left', 'right', 'bottom']}>
-      <Button label="关联商品延迟下架" onPress={() => router.push('/(tabs)/mine/offline-batches' as any)} />
+      <View style={styles.toolbar}>
+        <Button label="关联商品延迟下架" onPress={() => router.push('/(tabs)/mine/offline-batches' as any)} />
+        <Button label={batchSelectMode ? '取消选择' : '选择批量编辑'} variant="secondary" onPress={() => { setBatchSelectMode((value) => !value); setBatchSelectedItems([]); }} />
+        {batchSelectMode && <Button label={'批量编辑 (' + batchSelectedItems.length + ')'} onPress={openBatchEdit} disabled={!batchSelectedItems.length} />}
+      </View>
       {/* 账号选择（胶囊横滑） */}
       <View style={[styles.accountBar, { borderBottomColor: c.borderLight }]}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRowScroll}>
@@ -367,6 +406,7 @@ export default function ItemsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  toolbar: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, paddingHorizontal: spacing.lg, paddingTop: spacing.sm },
   accountBar: {
     borderBottomWidth: 1,
     paddingBottom: spacing.sm,

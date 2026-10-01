@@ -1,4 +1,4 @@
-﻿import { OfflineBatches } from './OfflineBatches'
+import { OfflineBatches } from './OfflineBatches'
 import { useEffect, useState, useRef } from 'react'
 import { CheckSquare, Download, Edit2, ExternalLink, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Settings, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Unlink, Tag } from 'lucide-react'
 import { batchDeleteItems, batchDeleteXianyuItems, batchOfflineItems, deleteItem, fetchAllItemsFromAccessibleAccounts, fetchAllItemsFromAccount, getItemsPaginated, updateItem, updateItemMultiQuantityDelivery, updateItemMultiSpec, updateItemPrice, getItemDefaultReply, saveItemDefaultReply, deleteItemDefaultReply, batchSaveItemDefaultReply, batchDeleteItemDefaultReply, getItemAiPrompt, saveItemAiPrompt, batchDeleteItemAiPrompt, batchSaveItemAiPrompt, uploadItemDefaultReplyImage, uploadBatchDefaultReplyImage, type ItemFilterParams } from '@/api/items'
@@ -7,6 +7,7 @@ import { getUserSetting } from '@/api/settings'
 import { batchClearItemRelations } from '@/api/cards'
 import { ItemCardRelationModal } from './ItemCardRelationModal'
 import SellerItemEditModal from './SellerItemEditModal'
+import BatchSellerItemEditModal from './BatchSellerItemEditModal'
 import { useUIStore } from '@/store/uiStore'
 import { PageLoading } from '@/components/common/Loading'
 import { useAuthStore } from '@/store/authStore'
@@ -63,6 +64,7 @@ export function Items() {
 
   // 鱼小铺商品编辑弹窗状态（界面同单品发布，提交后同步到闲鱼平台）
   const [sellerEditingItem, setSellerEditingItem] = useState<Item | null>(null)
+  const [batchEditingItems, setBatchEditingItems] = useState<Item[] | null>(null)
 
   // 卡券关联选择弹窗
   const [relationItem, setRelationItem] = useState<Item | null>(null)
@@ -1300,8 +1302,25 @@ export function Items() {
 
   // ==================== 批量发货配置 ====================
 
-  const filteredItems = items
+  const openBatchSellerEdit = () => {
+    const selected = items.filter((item) => selectedIds.has(item.id))
+    if (!selected.length) {
+      addToast({ type: 'warning', message: '请先选择要编辑的商品' })
+      return
+    }
+    const accountIds = new Set(selected.map((item) => item.cookie_id))
+    if (accountIds.size !== 1 || !selected[0].cookie_id) {
+      addToast({ type: 'warning', message: '批量编辑必须选择同一账号的商品' })
+      return
+    }
+    if (selected.some((item) => item.source_category !== 'managed' && item.source_category !== 'tool_published_unlinked')) {
+      addToast({ type: 'warning', message: '历史或来源待确认商品不能加入批量编辑' })
+      return
+    }
+    setBatchEditingItems(selected)
+  }
 
+  const filteredItems = items
   if (loading) {
     return <PageLoading />
   }
@@ -1329,6 +1348,10 @@ export function Items() {
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 删除闲鱼商品 ({selectedIds.size})
+              </button>
+              <button onClick={openBatchSellerEdit} className="btn-ios-secondary btn-sm whitespace-nowrap">
+                <Edit2 className="w-3.5 h-3.5" />
+                批量编辑 ({selectedIds.size})
               </button>
               <button onClick={openBatchOffline} className="btn-ios-secondary btn-sm whitespace-nowrap">
                 <PackageX className="w-3.5 h-3.5" />
@@ -2121,8 +2144,18 @@ export function Items() {
       )}
 
 
-      {/* 商品默认回复配置弹窗 */}
-      {defaultReplyItem && (
+      {batchEditingItems && (
+        <BatchSellerItemEditModal
+          items={batchEditingItems}
+          onClose={() => setBatchEditingItems(null)}
+          onCreated={() => {
+            setSelectedIds(new Set())
+            loadItems()
+          }}
+        />
+      )}
+
+      {/* 商品默认回复配置弹窗 */}      {defaultReplyItem && (
         <div className="modal-overlay" style={{ zIndex: 60 }}>
           <div className="modal-content max-w-lg">
             <div className="modal-header flex items-center justify-between">

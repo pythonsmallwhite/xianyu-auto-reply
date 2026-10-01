@@ -108,6 +108,16 @@ export async function updateSellerItem(
 }
 
 export type ManagedItemEditStatus = 'pending' | 'running' | 'success' | 'failed' | 'unknown' | 'skipped';
+export const ITEM_EDIT_WINDOW_HOURS = [1, 3, 5, 12, 24] as const;
+export type ItemEditWindowHours = (typeof ITEM_EDIT_WINDOW_HOURS)[number];
+
+export function isItemEditWindowHours(value: unknown): value is ItemEditWindowHours {
+  return ITEM_EDIT_WINDOW_HOURS.includes(value as ItemEditWindowHours);
+}
+
+function assertItemEditWindowHours(value: ItemEditWindowHours): void {
+  if (!isItemEditWindowHours(value)) throw new Error('请选择 1、3、5、12 或 24 小时执行窗口');
+}
 
 export interface BatchSellerItemEditPatch {
   title?: string;
@@ -125,13 +135,33 @@ export interface ManagedItemEditTargetResult {
   account_id: string;
   item_id: string;
   status: ManagedItemEditStatus;
+  scheduled_at?: string | null;
+  available_at?: string | null;
+  deadline_at?: string | null;
+  request_started_at?: string | null;
+  finished_at?: string | null;
+  message?: string | null;
+  retry_batch_id?: string | null;
+}
+
+export interface ManagedItemEditAttemptResult {
+  id: number;
+  target_id: number;
+  status: ManagedItemEditStatus;
+  request_started_at?: string | null;
+  finished_at?: string | null;
   message?: string | null;
 }
 
 export interface ManagedItemEditDetail {
   batch_id: string;
-  status: string;
+  owner_id?: number;
+  status: 'pending' | 'running' | 'finished';
+  window_hours: ItemEditWindowHours;
+  deadline_at?: string | null;
+  payload_snapshot?: BatchSellerItemEditPatch;
   targets: ManagedItemEditTargetResult[];
+  attempts?: ManagedItemEditAttemptResult[];
 }
 
 export async function createBatchSellerItemEdit(
@@ -141,6 +171,7 @@ export async function createBatchSellerItemEdit(
   patch: BatchSellerItemEditPatch,
   requestId?: string,
 ): Promise<{ success: boolean; message?: string; batch_id?: string }> {
+  assertItemEditWindowHours(windowHours);
   const client = await getApiClient();
   const { data, error } = (await (client.POST as any)(
     `/api/v1/items/${encodeURIComponent(cookieId)}/batch-seller-edit`,
@@ -170,6 +201,8 @@ export async function retryBatchSellerItemEdit(
   windowHours: 1 | 3 | 5 | 12 | 24,
   requestId: string,
 ): Promise<{ success: boolean; message?: string; batch_id?: string }> {
+  assertItemEditWindowHours(windowHours);
+  if (!targetIds.length) throw new Error('请选择明确失败的商品后再重试');
   const client = await getApiClient();
   const { data, error } = (await (client.POST as any)(
     `/api/v1/items/${encodeURIComponent(cookieId)}/batch-seller-edit/${encodeURIComponent(batchId)}/retry`,

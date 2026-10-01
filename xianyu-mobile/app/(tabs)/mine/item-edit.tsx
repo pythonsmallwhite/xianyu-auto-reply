@@ -17,6 +17,12 @@ import { colors, spacing, typography, radius } from '@/lib/theme';
 import {
   getSellerItemDetail,
   updateSellerItem,
+  createBatchSellerItemEdit,
+  getBatchSellerItemEdit,
+  retryBatchSellerItemEdit,
+  ITEM_EDIT_WINDOW_HOURS,
+  type ItemEditWindowHours,
+  type ManagedItemEditDetail,
   type SellerItemForm,
 } from '@/api/wrappers/item-edit';
 
@@ -33,11 +39,121 @@ const SHIPPING_OPTIONS: Array<{ value: 'free' | 'distance' | 'fixed' | 'none'; l
 /** seller-detail / seller-edit 依赖后端新接口，旧版后端会 404 */
 const BACKEND_VERSION_HINT = '该功能需要后端 v最新版支持';
 
+function BatchItemEditScreen({ cookieId, itemIds }: { cookieId: string; itemIds: string[] }) {
+  const scheme = useColorScheme();
+  const c = colors[scheme === 'dark' ? 'dark' : 'light'];
+  const router = useRouter();
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [price, setPrice] = useState('');
+  const [images, setImages] = useState('');
+  const [windowHours, setWindowHours] = useState<ItemEditWindowHours | ''>('');
+  const [saving, setSaving] = useState(false);
+  const [batchId, setBatchId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<ManagedItemEditDetail | null>(null);
+  const [retryWindow, setRetryWindow] = useState<ItemEditWindowHours | ''>('');
+  const [refreshing, setRefreshing] = useState(false);
+  const failedTargets = (detail?.targets || []).filter((target) => target.status === 'failed');
+
+  const refresh = useCallback(async (id = batchId) => {
+    if (!id) return;
+    setRefreshing(true);
+    try {
+      setDetail(await getBatchSellerItemEdit(cookieId, id));
+    } catch (error) {
+      Alert.alert('加载任务失败', (error as Error).message || '请稍后重试');
+    } finally {
+      setRefreshing(false);
+    }
+  }, [batchId, cookieId]);
+
+  async function create() {
+    if (!windowHours) return Alert.alert('提示', '请选择执行时间窗口');
+    const patch: Record<string, unknown> = {};
+    if (title.trim()) patch.title = title.trim();
+    if (description.trim()) patch.description = description;
+    if (price.trim()) {
+      const value = Number(price);
+      if (!Number.isFinite(value) || value <= 0) return Alert.alert('提示', '请输入正确的价格');
+      patch.price = value;
+    }
+    if (images.trim()) {
+      const urls = images.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean);
+      if (!urls.length || urls.length > 9) return Alert.alert('提示', '图片地址需为1至9个非空地址');
+      patch.images = urls;
+    }
+    if (!Object.keys(patch).length) return Alert.alert('提示', '请至少填写一项要修改的内容');
+    setSaving(true);
+    try {
+      const result = await createBatchSellerItemEdit(cookieId, itemIds, windowHours, patch, 'mobile-' + Date.now());
+      if (!result.success || !result.batch_id) throw new Error(result.message || '批量编辑任务创建失败');
+      setBatchId(result.batch_id);
+      await refresh(result.batch_id);
+      Alert.alert('已创建', '批量编辑任务已排程');
+    } catch (error) {
+      Alert.alert('创建失败', (error as Error).message || '请稍后重试');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function retry() {
+    if (!batchId || !retryWindow || !failedTargets.length) return Alert.alert('提示', '请选择新的时间窗口');
+    setSaving(true);
+    try {
+      const result = await retryBatchSellerItemEdit(cookieId, batchId, failedTargets.map((target) => target.id), retryWindow, 'mobile-retry-' + Date.now());
+      if (!result.success || !result.batch_id) throw new Error(result.message || '失败项重试创建失败');
+      setBatchId(result.batch_id);
+      setRetryWindow('');
+      await refresh(result.batch_id);
+      Alert.alert('已重试', '明确失败项已重新排程');
+    } catch (error) {
+      Alert.alert('重试失败', (error as Error).message || '请稍后重试');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['left', 'right', 'bottom']}>
+      <ScrollView contentContainerStyle={styles.list} keyboardShouldPersistTaps="handled">
+        {!detail ? (
+          <>
+            <Card style={styles.section}>
+              <Text style={[styles.label, { color: c.textSecondary }]}>批量编辑 {itemIds.length} 件商品</Text>
+              <Input value={title} onChangeText={setTitle} maxLength={200} placeholder="标题（可选）" />
+              <Input value={description} onChangeText={setDescription} maxLength={5000} multiline placeholder="描述（可选）" style={styles.descriptionInput} />
+              <Input value={price} onChangeText={setPrice} keyboardType="decimal-pad" placeholder="价格（可选）" />
+              <Input value={images} onChangeText={setImages} multiline placeholder="图片地址，每行一个（可选）" />
+            </Card>
+            <Card style={styles.section}>
+              <Text style={[styles.label, { color: c.textSecondary }]}>执行时间窗口（必选）</Text>
+              <View style={styles.chipRow}>{ITEM_EDIT_WINDOW_HOURS.map((value) => {
+                const selected = windowHours === value;
+                return <Pressable key={value} onPress={() => setWindowHours(value)} style={[styles.chip, { backgroundColor: selected ? c.primary : c.background, borderColor: selected ? c.primary : c.border }]}><Text style={[styles.chipText, { color: selected ? '#FFF' : c.text }]}>{value} 小时</Text></Pressable>;
+              })}</View>
+            </Card>
+            <Button label="创建批量编辑任务" onPress={create} loading={saving} style={styles.saveBtn} />
+          </>
+        ) : (
+          <Card style={styles.section}>
+            <View style={styles.statusHeader}><Text style={[styles.label, { color: c.text }]}>任务 {detail.batch_id}</Text><Button label="刷新状态" variant="secondary" onPress={() => refresh()} loading={refreshing} /></View>
+            <Text style={[styles.small, { color: c.textSecondary }]}>窗口 {detail.window_hours} 小时 · 截止 {detail.deadline_at || '未记录'}</Text>
+            {detail.targets.map((target) => <View key={target.id} style={[styles.targetRow, { borderBottomColor: c.borderLight }]}><Text style={[styles.small, { color: c.text }]}>商品 {target.item_id} · {target.status}</Text><Text style={[styles.small, { color: target.status === 'failed' ? c.error : c.textMuted }]}>{target.message || ('计划 ' + (target.scheduled_at || '未记录') + ' · 请求 ' + (target.request_started_at || '未发起'))}</Text></View>)}
+            {failedTargets.length > 0 && <><Text style={[styles.label, { color: c.error }]}>仅明确失败项可重试，结果未知项需先核对平台</Text><View style={styles.chipRow}>{ITEM_EDIT_WINDOW_HOURS.map((value) => <Pressable key={value} onPress={() => setRetryWindow(value)} style={[styles.chip, { backgroundColor: retryWindow === value ? c.primary : c.background, borderColor: retryWindow === value ? c.primary : c.border }]}><Text style={[styles.chipText, { color: retryWindow === value ? '#FFF' : c.text }]}>{value} 小时</Text></Pressable>)}</View><Button label="重试失败项" onPress={retry} loading={saving} style={styles.saveBtn} /></>}
+            <Button label="返回" variant="secondary" onPress={() => router.back()} style={styles.saveBtn} />
+          </Card>
+        )}
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
 export default function ItemEditScreen() {
   const scheme = useColorScheme();
   const c = colors[scheme === 'dark' ? 'dark' : 'light'];
   const router = useRouter();
-  const { cookieId, itemId } = useLocalSearchParams<{ cookieId: string; itemId: string }>();
+  const { cookieId, itemId, itemIds } = useLocalSearchParams<{ cookieId?: string; itemId?: string; itemIds?: string | string[] }>();
+  const batchItemIds = (Array.isArray(itemIds) ? itemIds.join(',') : itemIds || '').split(',').map((value) => value.trim()).filter(Boolean);
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -54,8 +170,10 @@ export default function ItemEditScreen() {
   const [supportPickup, setSupportPickup] = useState(false);
 
   const paramsReady = Boolean(cookieId && itemId);
+  const isBatchMode = Boolean(cookieId && batchItemIds.length > 0);
 
   const load = useCallback(async () => {
+    if (isBatchMode) return;
     if (!cookieId || !itemId) {
       setLoadError('缺少 cookieId 或 itemId 参数');
       setLoading(false);
@@ -81,11 +199,11 @@ export default function ItemEditScreen() {
     } finally {
       setLoading(false);
     }
-  }, [cookieId, itemId]);
+  }, [cookieId, itemId, isBatchMode]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    if (!isBatchMode) load();
+  }, [load, isBatchMode]);
 
   async function handleSave() {
     if (!cookieId || !itemId) return;
@@ -141,6 +259,10 @@ export default function ItemEditScreen() {
     } finally {
       setSaving(false);
     }
+  }
+
+  if (isBatchMode && cookieId) {
+    return <BatchItemEditScreen cookieId={cookieId} itemIds={batchItemIds} />;
   }
 
   if (loading) {
@@ -333,6 +455,9 @@ const styles = StyleSheet.create({
   },
   switchLabel: { ...typography.body },
   saveBtn: { marginTop: spacing.sm },
+  statusHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
+  targetRow: { paddingVertical: spacing.sm, gap: spacing.xs },
+  small: { ...typography.small },
   errorWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl, gap: spacing.sm },
   errorTitle: { ...typography.heading },
   errorText: { ...typography.caption, textAlign: 'center' },
