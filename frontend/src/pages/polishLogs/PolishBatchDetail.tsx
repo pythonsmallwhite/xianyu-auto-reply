@@ -77,6 +77,7 @@ export function PolishBatchDetailPage() {
         { value: 'all', label: '全部状态' },
         { value: 'success', label: '成功' },
         { value: 'failed', label: '失败' },
+        { value: 'unknown', label: '结果未知' },
       ]}
       columns={columns}
     />

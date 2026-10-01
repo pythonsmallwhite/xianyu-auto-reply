@@ -17,7 +17,7 @@ export interface PolishLog {
   batch_id: string
   account_id: string
   item_id: string
-  status: 'success' | 'failed'
+  status: 'success' | 'failed' | 'unknown'
   error_message: string | null
   created_at: string
 }

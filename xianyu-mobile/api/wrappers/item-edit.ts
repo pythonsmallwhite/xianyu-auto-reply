@@ -107,6 +107,78 @@ export async function updateSellerItem(
   return { success: data?.success ?? true, message: data?.message };
 }
 
+export type ManagedItemEditStatus = 'pending' | 'running' | 'success' | 'failed' | 'unknown' | 'skipped';
+
+export interface BatchSellerItemEditPatch {
+  title?: string;
+  description?: string;
+  price?: number;
+  original_price?: number | null;
+  /** Omit to retain each target's platform images. */
+  images?: string[];
+  videos?: SellerItemForm['videos'];
+  [key: string]: unknown;
+}
+
+export interface ManagedItemEditTargetResult {
+  id: number;
+  account_id: string;
+  item_id: string;
+  status: ManagedItemEditStatus;
+  message?: string | null;
+}
+
+export interface ManagedItemEditDetail {
+  batch_id: string;
+  status: string;
+  targets: ManagedItemEditTargetResult[];
+}
+
+export async function createBatchSellerItemEdit(
+  cookieId: string,
+  itemIds: string[],
+  windowHours: 1 | 3 | 5 | 12 | 24,
+  patch: BatchSellerItemEditPatch,
+  requestId?: string,
+): Promise<{ success: boolean; message?: string; batch_id?: string }> {
+  const client = await getApiClient();
+  const { data, error } = (await (client.POST as any)(
+    `/api/v1/items/${encodeURIComponent(cookieId)}/batch-seller-edit`,
+    { body: { item_ids: itemIds, window_hours: windowHours, patch, request_id: requestId } },
+  )) as { data?: { success?: boolean; message?: string; data?: { batch_id?: string } }; error?: unknown };
+  if (error) throw await extractError(error);
+  return { success: data?.success === true, message: data?.message, batch_id: data?.data?.batch_id };
+}
+
+export async function getBatchSellerItemEdit(
+  cookieId: string,
+  batchId: string,
+): Promise<ManagedItemEditDetail> {
+  const client = await getApiClient();
+  const { data, error } = (await (client.GET as any)(
+    `/api/v1/items/${encodeURIComponent(cookieId)}/batch-seller-edit/${encodeURIComponent(batchId)}`,
+  )) as { data?: { success?: boolean; data?: ManagedItemEditDetail; message?: string }; error?: unknown };
+  if (error) throw await extractError(error);
+  if (data?.success !== true || !data.data) throw new Error(data?.message || '获取批量编辑任务失败');
+  return data.data;
+}
+
+export async function retryBatchSellerItemEdit(
+  cookieId: string,
+  batchId: string,
+  targetIds: number[],
+  windowHours: 1 | 3 | 5 | 12 | 24,
+  requestId: string,
+): Promise<{ success: boolean; message?: string; batch_id?: string }> {
+  const client = await getApiClient();
+  const { data, error } = (await (client.POST as any)(
+    `/api/v1/items/${encodeURIComponent(cookieId)}/batch-seller-edit/${encodeURIComponent(batchId)}/retry`,
+    { body: { target_ids: targetIds, window_hours: windowHours, request_id: requestId } },
+  )) as { data?: { success?: boolean; message?: string; data?: { batch_id?: string } }; error?: unknown };
+  if (error) throw await extractError(error);
+  return { success: data?.success === true, message: data?.message, batch_id: data?.data?.batch_id };
+}
+
 /**
  * 商品批量删除（平台删除 + 本地记录清理）
  * 返回新增的 local_deleted_count / local_failed_ids 供 UI 展示

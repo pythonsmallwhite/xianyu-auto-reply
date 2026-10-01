@@ -19,6 +19,7 @@ import aiohttp
 from loguru import logger
 from sqlalchemy import delete as sql_delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from common.db.session import async_session_maker
 from common.models.xy_account import XYAccount
@@ -176,18 +177,13 @@ class PolishTaskService:
                         await update_account_cookies_in_db(account.account_id, current_cookie_str)
                         logger.info(f"【{self.task_name}】账号 {account.account_id} Cookie已通过Set-Cookie更新并写入数据库")
                     
-                    # 判断是否成功（包括"一天只能擦亮一次"的情况）
-                    is_success = result.get("success")
+                    # 只接受明确状态；未知结果不能当作成功，也不能由下一轮自动重发。
+                    result_status = result.get("status")
                     error_msg = result.get("message", "")
-                    
-                    # 如果返回"一天只能擦亮一次"，也视为成功
-                    if not is_success and ("一天只能擦亮一次" in error_msg or "POLISH_DUPLICATE" in error_msg):
-                        is_success = True
-                        logger.info(f"【{self.task_name}】账号 {account.account_id} 商品 {item.item_id} 今天已擦亮过，视为成功")
-                    
-                    if is_success:
+                    if result_status == "success":
                         # 擦亮成功，更新商品状态
                         item.is_polished = True
+                        self._set_item_result_status(item, "success")
                         session.add(item)
                         success_count += 1
                         logger.info(f"【{self.task_name}】账号 {account.account_id} 商品 {item.item_id} 擦亮成功")
@@ -201,9 +197,11 @@ class PolishTaskService:
                             success=True,
                             error_message=None
                         )
-                    else:
+                    elif result_status in {"failed", "unknown"}:
                         failed_count += 1
-                        logger.warning(f"【{self.task_name}】账号 {account.account_id} 商品 {item.item_id} 擦亮失败: {error_msg}")
+                        self._set_item_result_status(item, result_status)
+                        session.add(item)
+                        logger.warning(f"【{self.task_name}】账号 {account.account_id} 商品 {item.item_id} 擦亮{result_status}: {error_msg}")
                         
                         # 缺少令牌或Session过期时，标记账号冷却并触发后台异步密码登录，跳过该账号剩余商品
                         if 'SESSION_EXPIRED' in error_msg or 'Cookie中没有找到_m_h5_tk' in error_msg or 'TOKEN_EMPTY' in error_msg or '令牌为空' in error_msg or '已掉线' in error_msg or '请重新登录' in error_msg:
@@ -222,7 +220,7 @@ class PolishTaskService:
                                 batch_id=batch_id,
                                 account_id=account.account_id,
                                 item_id=item.item_id,
-                                success=False,
+                                status=result_status,
                                 error_message=error_msg
                             )
                             break
@@ -241,8 +239,20 @@ class PolishTaskService:
                             batch_id=batch_id,
                             account_id=account.account_id,
                             item_id=item.item_id,
-                            success=False,
+                            status=result_status,
                             error_message=error_msg
+                        )
+                    else:
+                        failed_count += 1
+                        self._set_item_result_status(item, "unknown")
+                        session.add(item)
+                        await self._log_execution(
+                            session=session,
+                            batch_id=batch_id,
+                            account_id=account.account_id,
+                            item_id=item.item_id,
+                            status="unknown",
+                            error_message="擦亮接口未返回明确结果",
                         )
                     
                     # 避免请求过快
@@ -259,7 +269,7 @@ class PolishTaskService:
                         batch_id=batch_id,
                         account_id=account.account_id,
                         item_id=item.item_id,
-                        success=False,
+                        status="unknown",
                         error_message=error_msg
                     )
 
@@ -290,7 +300,17 @@ class PolishTaskService:
             (XYCatalogItem.is_polished == False) | (XYCatalogItem.is_polished == None),
         )
         result = await session.execute(stmt)
-        return list(result.scalars().all())
+        return [
+            item for item in result.scalars().all()
+            if (item.metadata_json or {}).get("polish_result_status") != "unknown"
+        ]
+
+    @staticmethod
+    def _set_item_result_status(item: XYCatalogItem, status: str) -> None:
+        metadata = dict(item.metadata_json or {})
+        metadata["polish_result_status"] = status
+        item.metadata_json = metadata
+        flag_modified(item, "metadata_json")
 
     async def _polish_item(self, cookie_str: str, item_id: str, retry_count: int = 0) -> dict:
         """
@@ -316,7 +336,7 @@ class PolishTaskService:
             token = cookies.get('_m_h5_tk', '').split('_')[0] if cookies.get('_m_h5_tk') else ''
             
             if not token:
-                return {"success": False, "message": "Cookie中没有找到_m_h5_tk"}
+                return {"success": False, "status": "failed", "message": "Cookie中没有找到_m_h5_tk"}
             
             # 生成时间戳
             t = str(int(time.time() * 1000))
@@ -392,13 +412,13 @@ class PolishTaskService:
                     
                     # 判断结果
                     if result.get('ret') and result['ret'][0] == 'SUCCESS::调用成功':
-                        return {"success": True, "message": "擦亮成功", "cookie_str": new_cookie_str}
+                        return {"success": True, "status": "success", "message": "擦亮成功", "cookie_str": new_cookie_str}
                     else:
                         error_msg = result.get('ret', ['未知错误'])[0] if result.get('ret') else '未知错误'
                         
                         # 如果返回"宝贝已经擦亮过了"，也视为成功
                         if '宝贝已经擦亮过了' in error_msg or 'IDLEITEM_POLISH_AGAIN' in error_msg:
-                            return {"success": True, "message": "商品已经擦亮过了", "cookie_str": new_cookie_str}
+                            return {"success": True, "status": "success", "message": "商品已经擦亮过了", "cookie_str": new_cookie_str}
                         
                         # 令牌过期时，用更新后的cookie重试
                         ret_list = result.get('ret', [])
@@ -411,12 +431,12 @@ class PolishTaskService:
                                 await asyncio.sleep(0.5)
                                 return await self._polish_item(new_cookie_str, item_id, retry_count + 1)
                         
-                        return {"success": False, "message": error_msg, "cookie_str": new_cookie_str}
+                        return {"success": False, "status": "failed", "message": error_msg, "cookie_str": new_cookie_str}
                         
         except aiohttp.ClientError as e:
-            return {"success": False, "message": f"商品 {item_id} 网络请求失败: {e}"}
+            return {"success": False, "status": "unknown", "_request_status_unknown": True, "message": f"商品 {item_id} 网络请求失败，请先核对平台: {e}"}
         except Exception as e:
-            return {"success": False, "message": f"商品 {item_id} 擦亮异常: {e}"}
+            return {"success": False, "status": "unknown", "_request_status_unknown": True, "message": f"商品 {item_id} 擦亮结果未知，请先核对平台: {e}"}
     
     def _handle_polish_response_cookies(self, response, original_cookie_str: str) -> str:
         """处理擦亮API响应中的set-cookie，返回更新后的cookie字符串
@@ -456,7 +476,8 @@ class PolishTaskService:
         batch_id: str,
         account_id: str,
         item_id: str,
-        success: bool,
+        success: bool | None = None,
+        status: str | None = None,
         error_message: Optional[str] = None,
     ) -> None:
         """
@@ -475,7 +496,7 @@ class PolishTaskService:
                 batch_id=batch_id,
                 account_id=account_id,
                 item_id=item_id,
-                status="success" if success else "failed",
+                status=status or ("success" if success else "failed"),
                 error_message=error_message[:500] if error_message else None,
             )
             session.add(log)

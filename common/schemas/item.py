@@ -1,5 +1,7 @@
 ﻿from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -106,7 +108,8 @@ class SellerItemEditRequest(BaseModel):
     description: str = Field(..., min_length=1, max_length=5000)
     price: float = Field(..., gt=0)
     original_price: float | None = None
-    images: list[str] = Field(..., min_length=1, max_length=9)
+    # 编辑时省略 images 表示保留平台快照；显式空列表仍会被后端拒绝。
+    images: list[str] | None = Field(default=None, min_length=1, max_length=9)
     # 编辑弹窗会回填平台已有视频；空列表表示用户删光了视频（后端不再回退快照）
     videos: list[SellerItemVideo] = Field(default_factory=list, max_length=3)
     platform_category_id: str | None = Field(default=None, max_length=64)
@@ -137,5 +140,53 @@ class SellerItemEditRequest(BaseModel):
     def normalize_delivery_method(self) -> "SellerItemEditRequest":
         """以实际运费方式统一兼容字段，避免编辑载荷自相矛盾。"""
         self.delivery_method = "pickup" if self.shipping_method == "none" else "express"
+        return self
+
+
+class BatchSellerItemEditPatch(BaseModel):
+    """Fields changed for every target in a managed batch edit.
+
+    Omitted ``images`` means retain each target's current platform images;
+    an empty image list is rejected because the platform requires a cover.
+    """
+
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, min_length=1, max_length=5000)
+    price: float | None = Field(default=None, gt=0)
+    original_price: float | None = None
+    images: list[str] | None = Field(default=None, max_length=9)
+    videos: list[SellerItemVideo] | None = Field(default=None, max_length=3)
+    platform_category_id: str | None = Field(default=None, max_length=64)
+    platform_category_name: str | None = Field(default=None, max_length=100)
+    platform_channel_category_id: str | None = Field(default=None, max_length=64)
+    platform_channel_category_name: str | None = Field(default=None, max_length=100)
+    platform_leaf_id: str | None = Field(default=None, max_length=64)
+    platform_tb_category_id: str | None = Field(default=None, max_length=64)
+    platform_attributes: list[SellerItemAttribute] | None = Field(default=None, max_length=30)
+    specifications: list[SellerItemSpecification] | None = Field(default=None, max_length=2)
+    sku_rows: list[SellerItemSkuRow] | None = Field(default=None, max_length=200)
+    quantity: int | None = Field(default=None, ge=0, le=999999)
+    address: str | None = Field(default=None, max_length=200)
+    address_expected_text: str | None = Field(default=None, max_length=200)
+    delivery_method: str | None = Field(default=None, pattern="^(express|pickup)$")
+    shipping_method: str | None = Field(default=None, pattern="^(free|distance|fixed|template|none)$")
+    support_pickup: bool | None = None
+    postage: float | None = Field(default=None, ge=0, le=1000)
+    brand: str | None = Field(default=None, max_length=100)
+    condition: str | None = Field(default=None, max_length=20)
+
+
+class BatchSellerItemEditRequest(BaseModel):
+    """Create a durable edit batch for one account and explicit item IDs."""
+
+    item_ids: list[str] = Field(..., min_length=1, max_length=200)
+    window_hours: Literal[1, 3, 5, 12, 24] = Field(..., description="必须显式选择 1/3/5/12/24 小时")
+    patch: BatchSellerItemEditPatch
+    request_id: str | None = Field(default=None, max_length=36)
+
+    @model_validator(mode="after")
+    def validate_images(self) -> "BatchSellerItemEditRequest":
+        if self.patch.images == []:
+            raise ValueError("商品图片不能为空；不修改图片时请省略 images")
         return self
 

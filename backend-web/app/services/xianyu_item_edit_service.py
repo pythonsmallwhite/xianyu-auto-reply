@@ -56,7 +56,7 @@ def _fail(message: str, *, account_invalid: bool, cookie: str) -> dict[str, Any]
 
 
 async def _call_seller_api(
-    *, account_id: str, cookie: str, owner_id: int | None, api: str, data: dict[str, Any]
+    *, account_id: str, cookie: str, owner_id: int | None, api: str, data: dict[str, Any], request_guard=None
 ) -> dict[str, Any]:
     """按卖家后台的请求头与 spm 参数调用编辑相关 mtop 接口。
 
@@ -80,6 +80,7 @@ async def _call_seller_api(
         origin=SELLER_ORIGIN,
         referer=SELLER_REFERER,
         extra_headers=SELLER_EXTRA_HEADERS,
+        request_guard=request_guard,
     )
 
 
@@ -258,6 +259,7 @@ async def edit_seller_item(
     item_data: dict[str, Any],
     owner_id: int | None = None,
     static_root: str | Path | None = None,
+    request_guard=None,
 ) -> dict[str, Any]:
     """提交鱼小铺商品编辑，载荷与单品发布共用构造器。
 
@@ -288,6 +290,14 @@ async def edit_seller_item(
     if failure:
         return failure
 
+    # 编辑请求省略 images 时沿用本次新鲜平台快照；显式空列表由构造器拒绝。
+    if item_data.get("images") is None:
+        retained_images = map_edit_detail_to_form(snapshot or {}).get("images") or []
+        if not retained_images:
+            return _fail("商品详情没有可保留的图片", account_invalid=False, cookie=cookie)
+        item_data = dict(item_data)
+        item_data["images"] = retained_images
+
     try:
         payload, cookie = await build_item_payload(
             item_data,
@@ -312,6 +322,7 @@ async def edit_seller_item(
         owner_id=owner_id,
         api=EDIT_API,
         data={"inputJson": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))},
+        request_guard=request_guard,
     )
     cookie = response.get("cookies_str") or cookie
     # 抓包中 edit 响应体为空，成功结构未知：无论成败都打印完整返回，便于据实收紧判定
@@ -320,6 +331,16 @@ async def edit_seller_item(
         f"response={_loggable_response(response)}"
     )
     if not response.get("success"):
+        if response.get("_request_status_unknown"):
+            return {
+                "success": False,
+                "status": "unknown",
+                "_request_status_unknown": True,
+                "message": "编辑请求已发出但结果未知，请先核对平台",
+                "account_invalid": False,
+                "cookies_str": cookie,
+                "data": None,
+            }
         return _fail(
             f"闲鱼接口编辑失败：{response.get('error') or '未知错误'}",
             account_invalid=bool(response.get("account_invalid")),
@@ -331,6 +352,7 @@ async def edit_seller_item(
         return _fail(f"闲鱼接口编辑失败：{business_failure}", account_invalid=False, cookie=cookie)
     return {
         "success": True,
+        "status": "success",
         "message": "商品编辑成功",
         "account_invalid": False,
         "cookies_str": cookie,

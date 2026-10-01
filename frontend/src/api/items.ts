@@ -264,6 +264,60 @@ export const updateSellerItem = (
   return put(`${ITEM_PREFIX}/${cookieId}/${itemId}/seller-edit`, payload)
 }
 
+export interface BatchSellerItemEditPatch {
+  title?: string
+  description?: string
+  price?: number
+  original_price?: number | null
+  /** Omit to retain each target's current images; an empty list is invalid. */
+  images?: string[]
+  videos?: MaterialVideo[]
+  [key: string]: unknown
+}
+
+export interface ManagedItemEditTargetResult {
+  id: number
+  account_id: string
+  item_id: string
+  status: 'pending' | 'running' | 'success' | 'failed' | 'unknown' | 'skipped'
+  message?: string | null
+}
+
+export interface ManagedItemEditResponse {
+  batch_id: string
+  status: 'pending' | 'running' | 'finished'
+  targets?: ManagedItemEditTargetResult[]
+}
+
+export const createBatchSellerItemEdit = (
+  cookieId: string,
+  itemIds: string[],
+  windowHours: 1 | 3 | 5 | 12 | 24,
+  patch: BatchSellerItemEditPatch,
+  requestId?: string,
+): Promise<ApiResponse<{ batch_id: string; status: string }>> => post(
+  `${ITEM_PREFIX}/${encodeURIComponent(cookieId)}/batch-seller-edit`,
+  { item_ids: itemIds, window_hours: windowHours, patch, request_id: requestId },
+)
+
+export const getBatchSellerItemEdit = (
+  cookieId: string,
+  batchId: string,
+): Promise<ApiResponse<ManagedItemEditResponse>> => get(
+  `${ITEM_PREFIX}/${encodeURIComponent(cookieId)}/batch-seller-edit/${encodeURIComponent(batchId)}`,
+)
+
+export const retryBatchSellerItemEdit = (
+  cookieId: string,
+  batchId: string,
+  targetIds: number[],
+  windowHours: 1 | 3 | 5 | 12 | 24,
+  requestId: string,
+): Promise<ApiResponse<{ batch_id: string; status: string }>> => post(
+  `${ITEM_PREFIX}/${encodeURIComponent(cookieId)}/batch-seller-edit/${encodeURIComponent(batchId)}/retry`,
+  { target_ids: targetIds, window_hours: windowHours, request_id: requestId },
+)
+
 
 // ==================== 商品默认回复 ====================
 

@@ -19,6 +19,7 @@ from common.utils.default_reply_location import EXTERNAL_CONTACT_REPLY_TYPE, val
 from common.models.user_setting import UserSetting
 from sqlalchemy import select
 from common.schemas.item import (
+    BatchSellerItemEditRequest,
     ItemBatchDeleteRequest,
     ItemBatchOfflineRequest,
     ItemFullFetchRequest,
@@ -31,6 +32,7 @@ from app.services.account_service import AccountService
 from app.services.item_service import ItemService
 from app.services.selectable_item_service import SelectableItemService
 from app.services.xianyu_item_edit_service import edit_seller_item, fetch_seller_item_edit_detail
+from common.services.managed_item_edit_service import ManagedItemEditService
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +218,7 @@ async def list_items_by_cookie(
 
 # ==================== 商品默认回复（必须在 /{cookie_id}/{item_id} 之前定义）====================
 
-from pydantic import BaseModel as PydanticBaseModel
+from pydantic import BaseModel as PydanticBaseModel, Field
 
 
 class ItemDefaultReplyRequest(PydanticBaseModel):
@@ -927,6 +929,93 @@ async def update_seller_item(
         logger.error(f"编辑成功后同步商品失败: cookie_id={cookie_id}, item_id={item_id}, error={exc}")
         message = f"{message}，但商品同步失败：{exc}，请手动刷新商品列表"
     return ApiResponse(success=True, message=message)
+
+
+@items_router.post("/{cookie_id}/batch-seller-edit", response_model=ApiResponse)
+async def create_batch_seller_item_edit(
+    cookie_id: str,
+    payload: BatchSellerItemEditRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+    db: AsyncSession = Depends(deps.get_db_session),
+) -> ApiResponse:
+    """Create an owner-scoped durable batch edit.
+
+    The request stores one immutable patch snapshot.  Each target is checked
+    against the exact account/item mapping and history source before a task is
+    created; no platform request is made by this endpoint.
+    """
+    owner_id, _ = resolve_owner_scope(current_user)
+    account = await account_service.get_account_for_user(owner_id, cookie_id)
+    if not account:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="账号不存在")
+    try:
+        batch_id = await ManagedItemEditService(db).create(
+            owner_id=owner_id,
+            account_id=cookie_id,
+            item_ids=payload.item_ids,
+            window_hours=payload.window_hours,
+            payload=payload.patch.model_dump(exclude_unset=True),
+            request_id=payload.request_id,
+        )
+        await db.commit()
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return ApiResponse(success=True, message="批量编辑任务已创建", data={"batch_id": batch_id, "status": "pending"})
+
+
+@items_router.get("/{cookie_id}/batch-seller-edit/{batch_id}", response_model=ApiResponse)
+async def get_batch_seller_item_edit(
+    cookie_id: str,
+    batch_id: str,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+    db: AsyncSession = Depends(deps.get_db_session),
+) -> ApiResponse:
+    owner_id, _ = resolve_owner_scope(current_user)
+    if not await account_service.get_account_for_user(owner_id, cookie_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="账号不存在")
+    try:
+        data = await ManagedItemEditService(db).detail(owner_id=owner_id, batch_id=batch_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    if any(target.get("account_id") != cookie_id for target in data.get("targets", [])):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="任务不存在或账号归属已改变")
+    return ApiResponse(success=True, message="获取批量编辑任务成功", data=data)
+
+
+class BatchSellerItemEditRetryRequest(PydanticBaseModel):
+    target_ids: list[int] = Field(..., min_length=1, max_length=200)
+    window_hours: int
+    request_id: str = Field(..., min_length=1, max_length=36)
+
+
+@items_router.post("/{cookie_id}/batch-seller-edit/{batch_id}/retry", response_model=ApiResponse)
+async def retry_batch_seller_item_edit(
+    cookie_id: str,
+    batch_id: str,
+    payload: BatchSellerItemEditRetryRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+    db: AsyncSession = Depends(deps.get_db_session),
+) -> ApiResponse:
+    owner_id, _ = resolve_owner_scope(current_user)
+    if not await account_service.get_account_for_user(owner_id, cookie_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="账号不存在")
+    try:
+        new_batch_id = await ManagedItemEditService(db).retry(
+            owner_id=owner_id,
+            batch_id=batch_id,
+            target_ids=payload.target_ids,
+            window_hours=payload.window_hours,
+            request_id=payload.request_id,
+        )
+        await db.commit()
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return ApiResponse(success=True, message="批量编辑失败项已重新排程", data={"batch_id": new_batch_id, "status": "pending"})
 
 
 @items_router.put("/{cookie_id}/{item_id}/multi-quantity-delivery", response_model=ApiResponse)
