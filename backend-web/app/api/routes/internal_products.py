@@ -127,6 +127,11 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from common.models.listing_action import ListingActionBatch
 from common.services.listing_action_service import ListingActionService
+from common.schemas.listing_action import (
+    ListingActionBatchRequest as RelistBatchRequest,
+    ListingActionRetryRequest as RelistRetryRequest,
+    ListingActionReconcileRequest as RelistReconcileRequest,
+)
 
 class OfflineBatchRequest(BaseModel):
     listing_ids: list[int] = Field(min_length=1, max_length=200)
@@ -200,6 +205,77 @@ async def retry_offline_batch(batch_id: str, payload: OfflineRetryRequest,
 
 @router.post("/offline-batches/{batch_id}/targets/{target_id}/reconcile", response_model=ApiResponse)
 async def reconcile_offline_target(batch_id: str, target_id: int, payload: OfflineReconcileRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    session: AsyncSession = Depends(deps.get_db_session)):
+    try:
+        data = await ListingActionService(session).reconcile(current_user.id, batch_id, target_id,
+            payload.platform_state, payload.note)
+        await session.commit()
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(400, str(exc)) from exc
+    return ApiResponse(success=True, data=data)
+@router.post("/{product_id}/relist-batches", response_model=ApiResponse)
+@router.post("/{product_id}/recovery-batches", response_model=ApiResponse)
+async def create_relist_batch(product_id: int, payload: RelistBatchRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    session: AsyncSession = Depends(deps.get_db_session)):
+    try:
+        batch_id = await ListingActionService(session).create(current_user.id, product_id,
+            payload.listing_ids, payload.window_hours, str(payload.request_id), operation="relist")
+        await session.commit()
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(400, str(exc)) from exc
+    return ApiResponse(success=True, data={"batch_id": batch_id, "operation": "relist"})
+
+
+@router.get("/{product_id}/relist-batches", response_model=ApiResponse)
+@router.get("/{product_id}/recovery-batches", response_model=ApiResponse)
+async def list_relist_batches(product_id: int,
+    current_user: User = Depends(deps.get_current_active_user),
+    session: AsyncSession = Depends(deps.get_db_session)):
+    rows = (await session.scalars(select(ListingActionBatch).where(
+        ListingActionBatch.owner_id == current_user.id,
+        ListingActionBatch.internal_product_id == product_id,
+        ListingActionBatch.operation == "relist",
+    ).order_by(ListingActionBatch.created_at.desc()).limit(50))).all()
+    return ApiResponse(success=True, data=[{"batch_id": r.id, "operation": r.operation,
+        "window_hours": r.window_hours, "deadline_at": r.deadline_at.isoformat()} for r in rows])
+
+
+@router.get("/relist-batches/{batch_id}", response_model=ApiResponse)
+@router.get("/recovery-batches/{batch_id}", response_model=ApiResponse)
+async def relist_batch_detail(batch_id: str,
+    current_user: User = Depends(deps.get_current_active_user),
+    session: AsyncSession = Depends(deps.get_db_session)):
+    try:
+        data = await ListingActionService(session).detail(current_user.id, batch_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    if data.get("operation") != "relist":
+        raise HTTPException(404, "恢复任务不存在或类型不匹配")
+    return ApiResponse(success=True, data=data)
+
+
+@router.post("/relist-batches/{batch_id}/retry", response_model=ApiResponse)
+@router.post("/recovery-batches/{batch_id}/retry", response_model=ApiResponse)
+async def retry_relist_batch(batch_id: str, payload: RelistRetryRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    session: AsyncSession = Depends(deps.get_db_session)):
+    try:
+        result = await ListingActionService(session).retry(current_user.id, batch_id,
+            payload.target_ids, payload.window_hours, str(payload.request_id))
+        await session.commit()
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(400, str(exc)) from exc
+    return ApiResponse(success=True, data={"batch_id": result, "operation": "relist"})
+
+
+@router.post("/relist-batches/{batch_id}/targets/{target_id}/reconcile", response_model=ApiResponse)
+@router.post("/recovery-batches/{batch_id}/targets/{target_id}/reconcile", response_model=ApiResponse)
+async def reconcile_relist_target(batch_id: str, target_id: int, payload: RelistReconcileRequest,
     current_user: User = Depends(deps.get_current_active_user),
     session: AsyncSession = Depends(deps.get_db_session)):
     try:

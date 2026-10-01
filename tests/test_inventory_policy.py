@@ -18,6 +18,8 @@ class InventoryPolicyTests(unittest.TestCase):
             states = policy.apply_order_event(states, order_id, "placed")
             states = policy.apply_order_event(states, order_id, "paid")
         self.assertEqual(policy.available_stock(3, states), 0)
+        self.assertEqual(policy.InventoryAction(4, "schedule_relist").operation, "relist")
+        self.assertEqual(policy.InventoryAction(4, "schedule_offline").operation, "offline")
         listings = [
             policy.LinkedListing(i, "managed", "sold") for i in (1, 2, 3)
         ] + [

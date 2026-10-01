@@ -41,3 +41,15 @@ async def offline_listing(account_id, cookies_str, item_id, owner_id, request_gu
         "success": "平台已确认下架", "failed": "平台明确拒绝下架，请检查账号或商品后重试",
         "unknown": "下架结果未知，请核对平台状态，禁止自动重发",
     }[status]}
+async def relist_listing(account_id, cookies_str, item_id, owner_id, request_guard):
+    """Return a closed capability boundary until a verified relist protocol exists.
+
+    The durable executor can still be exercised with an injected adapter in
+    offline tests. The default implementation deliberately sends no request
+    and never claims that a listing was recovered.
+    """
+    return {
+        "status": "failed",
+        "capability_unavailable": True,
+        "message": "平台恢复接口未核验，未发送请求；请配置已核验的 relist 适配器",
+    }

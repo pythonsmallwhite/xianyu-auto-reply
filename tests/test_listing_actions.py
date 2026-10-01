@@ -10,12 +10,13 @@ class ListingActionTests(unittest.IsolatedAsyncioTestCase):
     def setUpClass(cls):
         fixture.DurablePublishBatchTests.setUpClass.__func__(cls)
         from common.models.listing_action import ListingActionBatch, ListingActionTarget, ListingActionAttempt
-        from common.models.internal_product import InternalProductListing
+        from common.models.internal_product import InternalProductListing, InventoryOrderHold
         from common.services import listing_action_service, listing_action_platform
         cls.actions, cls.platform = listing_action_service, listing_action_platform
         cls.ActionBatch, cls.ActionTarget, cls.ActionAttempt = ListingActionBatch, ListingActionTarget, ListingActionAttempt
         cls.Listing = InternalProductListing
-        cls.models += (ListingActionBatch, ListingActionTarget, ListingActionAttempt, InternalProductListing)
+        cls.Hold = InventoryOrderHold
+        cls.models += (ListingActionBatch, ListingActionTarget, ListingActionAttempt, InternalProductListing, InventoryOrderHold)
 
     async def asyncSetUp(self):
         await fixture.DurablePublishBatchTests.asyncSetUp(self)
@@ -23,6 +24,7 @@ class ListingActionTests(unittest.IsolatedAsyncioTestCase):
         self.enterContext(patch.object(self.actions, "database_now", AsyncMock(side_effect=lambda session: self.now)))
         self.enterContext(patch.object(self.actions, "plan_product_offsets", side_effect=lambda n,w: tuple(i*w*3600/(2*n) for i in range(n))))
         self.call = self.enterContext(patch.object(self.actions, "offline_listing", AsyncMock()))
+        self.relist_call = self.enterContext(patch.object(self.actions, "relist_listing", AsyncMock()))
         async with self.maker() as session:
             session.add(self.Product(id=10, owner_id=7, title="offline fixture"))
             session.add(self.Listing(id=20, owner_id=7, internal_product_id=10, account_id="acct", item_id="item", publish_log_id=100, state="active"))
@@ -366,6 +368,97 @@ class ListingActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(parse({"_request_status_unknown":True},"item"),"unknown")
 
 
+    async def create_relist(self, batch_id="relist", window=1):
+        async with self.maker() as session:
+            result = await self.actions.ListingActionService(session).create(
+                7, 10, [20], window, batch_id, operation="relist")
+            await session.commit()
+            return result
+
+    async def prepare_relist(self):
+        async with self.maker() as session:
+            product = await session.get(self.Product, 10)
+            product.total_stock = 3
+            listing = await session.get(self.Listing, 20)
+            listing.state, listing.offline_reason = "offline", "inventory"
+            await session.commit()
+        return await self.create_relist()
+
+    async def run_relist_status(self, status):
+        async def call(account, cookie, item, owner, guard):
+            async with guard():
+                return {"status": status, "message": "relist test"}
+        self.relist_call.side_effect = call
+        await self.actions.run_one()
+
+    async def test_relist_operation_is_explicit_and_request_idempotent(self):
+        await self.prepare_relist()
+        self.assertEqual(await self.create_relist(), "relist")
+        batches = await self.rows(self.ActionBatch)
+        targets = await self.rows(self.ActionTarget)
+        self.assertEqual([(row.operation, row.window_hours) for row in batches], [("relist", 1)])
+        self.assertEqual(len(targets), 1)
+
+    async def test_relist_success_reactivates_only_inventory_offline_listing(self):
+        await self.prepare_relist()
+        await self.run_relist_status("success")
+        listing, = await self.rows(self.Listing)
+        self.assertEqual((listing.state, listing.offline_reason, listing.state_version),
+                         ("active", None, 1))
+        target, = await self.rows(self.ActionTarget)
+        self.assertEqual((target.status, target.message), ("success", "relist test"))
+        self.relist_call.assert_awaited_once()
+        self.call.assert_not_awaited()
+
+    async def test_relist_failed_retry_preserves_operation_and_unknown_is_terminal(self):
+        await self.prepare_relist()
+        await self.run_relist_status("failed")
+        target, = await self.rows(self.ActionTarget)
+        async with self.maker() as session:
+            self.assertEqual(
+                await self.actions.ListingActionService(session).retry(
+                    7, "relist", [target.id], 3, "relist-retry"),
+                "relist-retry")
+            await session.commit()
+        retry = next(row for row in await self.rows(self.ActionBatch) if row.id == "relist-retry")
+        self.assertEqual((retry.operation, retry.window_hours), ("relist", 3))
+        self.assertEqual(len(await self.rows(self.ActionTarget)), 2)
+        await self.run_relist_status("unknown")
+        unknown = next(row for row in await self.rows(self.ActionTarget) if row.batch_id == "relist-retry")
+        self.assertEqual(unknown.status, "unknown")
+        listing, = await self.rows(self.Listing)
+        self.assertEqual(listing.state, "offline")
+        async with self.maker() as session:
+            with self.assertRaises(ValueError):
+                await self.actions.ListingActionService(session).retry(
+                    7, "relist-retry", [unknown.id], 1, "relist-retry-2")
+
+    async def test_relist_rejects_manual_offline_and_stale_version_guard(self):
+        async with self.maker() as session:
+            product = await session.get(self.Product, 10)
+            product.total_stock = 3
+            listing = await session.get(self.Listing, 20)
+            listing.state, listing.offline_reason = "offline", "manual"
+            await session.commit()
+        with self.assertRaises(ValueError):
+            await self.create_relist("manual-relist")
+        async with self.maker() as session:
+            listing = await session.get(self.Listing, 20)
+            listing.offline_reason = "inventory"
+            await session.commit()
+        await self.create_relist("stale-relist")
+        async with self.maker() as session:
+            listing = await session.get(self.Listing, 20)
+            listing.state_version += 1
+            await session.commit()
+        await self.run_relist_status("success")
+        row, = await self.rows(self.Listing)
+        self.assertEqual((row.state, row.offline_reason, row.state_version),
+                         ("offline", "inventory", 1))
+        target, = await self.rows(self.ActionTarget)
+        self.assertEqual(target.status, "failed")
+        self.relist_call.assert_awaited_once()
+
 class ListingActionMigrationTests(unittest.TestCase):
     """These tables are created by model-generated DDL with checkfirst=True.
 
@@ -523,3 +616,33 @@ class ListingActionSchemaTests(unittest.TestCase):
             with self.assertRaises(ValidationError):
                 model(**{"platform_state":"offline","note":"核对依据","confirmed":True,**mutation})
         self.assertEqual(set(model.model_fields), {"platform_state","note","confirmed"})
+    def test_relist_schema_is_explicit_and_requires_confirmation(self):
+        from common.schemas.listing_action import (
+            ListingActionBatchRequest,
+            ListingActionReconcileRequest,
+            ListingActionRetryRequest,
+        )
+        valid_batch = {
+            "listing_ids": [1],
+            "window_hours": 1,
+            "request_id": "00000000-0000-4000-8000-000000000001",
+            "confirmed": True,
+        }
+        self.assertEqual(ListingActionBatchRequest(**valid_batch).window_hours, 1)
+        valid_retry = {
+            "target_ids": [1],
+            "window_hours": 3,
+            "request_id": "00000000-0000-4000-8000-000000000002",
+            "confirmed": True,
+        }
+        self.assertEqual(ListingActionRetryRequest(**valid_retry).window_hours, 3)
+        self.assertEqual(
+            ListingActionReconcileRequest(
+                platform_state="active", note="已核对在售", confirmed=True
+            ).platform_state,
+            "active",
+        )
+        from pydantic import ValidationError
+        for mutation in ({"confirmed": False}, {"window_hours": 2}, {"listing_ids": []}):
+            with self.assertRaises(ValidationError):
+                ListingActionBatchRequest(**{**valid_batch, **mutation})

@@ -6,6 +6,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 from common.db.base_class import Base, TimestampMixin
 from common.models.publish_batch import SCHEDULE_DATETIME
 
+# Keep the operation persisted on each batch so recovery is never represented
+# as a disguised publish or an implicit side effect of an offline task.
+LISTING_ACTION_OPERATIONS = frozenset({"offline", "relist"})
+
 class ListingActionBatch(TimestampMixin, Base):
     __tablename__ = "xy_listing_action_batches"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)

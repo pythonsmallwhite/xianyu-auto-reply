@@ -49,6 +49,11 @@ class InventoryAction:
     listing_id: int
     kind: ActionKind
 
+    @property
+    def operation(self) -> Literal["offline", "relist"]:
+        """The durable listing-action operation represented by this decision."""
+        return "relist" if self.kind in {"schedule_relist", "cancel_relist"} else "offline"
+
 
 def apply_order_event(
     states: Mapping[str, OrderState],

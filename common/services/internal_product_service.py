@@ -429,7 +429,7 @@ class InternalProductService:
         ).scalar_one_or_none()
         if listing is None:
             return None
-        await self._locked_product(owner_id, listing.internal_product_id)
+        product = await self._locked_product(owner_id, listing.internal_product_id)
         if listing.state_version != expected_version:
             return None
         if action == "offline" and listing.state == "active":
@@ -440,6 +440,8 @@ class InternalProductService:
             and listing.state == "offline"
             and listing.offline_reason == "inventory"
         ):
+            if product.total_stock is None or product.total_stock - await self._occupied(product.id) <= 0:
+                return None
             listing.state = "active"
             listing.offline_reason = None
         else:

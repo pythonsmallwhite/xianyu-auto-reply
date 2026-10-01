@@ -6,11 +6,16 @@ from datetime import datetime, timedelta
 from uuid import uuid4
 from sqlalchemy import select, func
 from common.db.session import async_session_maker
-from common.models.internal_product import InternalProduct, InternalProductListing
-from common.models.listing_action import ListingActionBatch as Batch, ListingActionTarget as Target, ListingActionAttempt as Attempt
+from common.models.internal_product import InternalProduct, InternalProductListing, InventoryOrderHold
+from common.models.listing_action import (
+    LISTING_ACTION_OPERATIONS,
+    ListingActionBatch as Batch,
+    ListingActionTarget as Target,
+    ListingActionAttempt as Attempt,
+)
 from common.models.publish_batch_schedule import PublishProductSchedule as Schedule
 from common.models.xy_account import XYAccount
-from common.services.listing_action_platform import offline_listing
+from common.services.listing_action_platform import offline_listing, relist_listing
 from common.utils.batch_schedule import plan_product_offsets, minimum_gap_seconds, validate_window_hours, next_allowed_start
 
 class Deferred(Exception):
@@ -30,8 +35,8 @@ class ListingActionService:
 
     async def create(self, owner_id, product_id, listing_ids, window_hours, request_id, operation="offline"):
         validate_window_hours(window_hours)
-        if operation != "offline":
-            raise ValueError("恢复接口尚未核验，暂不能创建恢复任务")
+        if operation not in LISTING_ACTION_OPERATIONS:
+            raise ValueError("不支持的商品操作")
         ids = sorted(set(listing_ids))
         if not ids or len(ids) > 200:
             raise ValueError("请选择 1 至 200 个关联商品")
@@ -60,8 +65,20 @@ class ListingActionService:
             raise ValueError("只能选择本内部商品的明确关联项，历史商品不能加入")
         if len({r.account_id for r in listings}) != len(listings):
             raise ValueError("同一账号每批仅允许一个关联商品")
-        if any(r.state != "active" for r in listings):
-            raise ValueError("仅在售关联商品可以创建下架任务")
+        if operation == "offline":
+            if any(r.state != "active" for r in listings):
+                raise ValueError("仅在售关联商品可以创建下架任务")
+        else:
+            if any(r.state != "offline" or r.offline_reason != "inventory" for r in listings):
+                raise ValueError("仅因库存不足自动下架的关联商品可以创建恢复任务")
+            if product.total_stock is None:
+                raise ValueError("未配置内部库存，不能创建恢复任务")
+            occupied = await self.session.scalar(select(func.coalesce(func.sum(InventoryOrderHold.quantity), 0)).where(
+                InventoryOrderHold.internal_product_id == product_id,
+                InventoryOrderHold.status.in_(["reserved", "refund_hold"]),
+            ))
+            if product.total_stock - int(occupied or 0) <= 0:
+                raise ValueError("可用库存不足，不能创建恢复任务")
         accounts = set((await self.session.scalars(select(XYAccount.account_id).where(
             XYAccount.owner_id == owner_id, XYAccount.account_id.in_([r.account_id for r in listings]),
         ))).all())
@@ -132,17 +149,32 @@ class ListingActionService:
             raise ValueError("只有结果未知的目标需要人工核对")
         listing = await self.session.get(InternalProductListing, target.listing_id, with_for_update=True)
         conflict = False
-        message = f"人工核对为{'已下架' if platform_state == 'offline' else '仍在售'}：{note}"
-        if platform_state == "offline" and listing is not None:
+        if batch.operation == "relist":
+            message = ("人工核对为已恢复在售：" + note if platform_state == "active"
+                       else "人工核对为仍已下架：" + note)
+        else:
+            message = ("人工核对为已下架：" + note if platform_state == "offline"
+                       else "人工核对为仍在售：" + note)
+        if listing is not None:
             if (listing.owner_id, listing.internal_product_id, listing.account_id, listing.item_id) != (
                 batch.owner_id, batch.internal_product_id, target.account_id, target.item_id):
                 raise ValueError("商品关联已改变，不能按旧任务核对")
-            if listing.state_version == target.expected_version:
-                listing.state, listing.offline_reason, listing.pending_action = "offline", "manual", None
-                listing.state_version += 1
-            else:
-                conflict = True
-                message = "人工核对平台已下架，但本地状态已变更，请同步核对"
+            should_apply = (batch.operation == "offline" and platform_state == "offline") or (
+                batch.operation == "relist" and platform_state == "active")
+            if should_apply:
+                expected_state = "active" if batch.operation == "offline" else "offline"
+                expected_reason = None if batch.operation == "offline" else "inventory"
+                if listing.state_version == target.expected_version and listing.state == expected_state and listing.offline_reason == expected_reason:
+                    if batch.operation == "offline":
+                        listing.state, listing.offline_reason = "offline", "manual"
+                    else:
+                        listing.state, listing.offline_reason = "active", None
+                    listing.pending_action = None
+                    listing.state_version += 1
+                else:
+                    conflict = True
+                    message = ("人工核对平台已下架，但本地状态已变更，请同步核对" if batch.operation == "offline" else
+                               "人工核对平台已恢复在售，但本地状态已变更，请同步核对")
         target.status, target.reconciled_state, target.reconciled_note = "reconciled", platform_state, note[:500]
         target.reconciled_at, target.message = await database_now(self.session), message
         target.reconciled_conflict = conflict
@@ -163,9 +195,9 @@ class ListingActionService:
             raise ValueError("只能重试明确失败项，成功/未知/跳过项不可重发")
         if any(r.retry_batch_id for r in rows):
             if all(r.retry_batch_id == request_id for r in rows):
-                return await self.create(owner_id, batch.internal_product_id, [r.listing_id for r in rows], window_hours, request_id)
+                return await self.create(owner_id, batch.internal_product_id, [r.listing_id for r in rows], window_hours, request_id, batch.operation)
             raise ValueError("这些失败项已创建重试任务，请查看新任务")
-        result = await self.create(owner_id, batch.internal_product_id, [r.listing_id for r in rows], window_hours, request_id)
+        result = await self.create(owner_id, batch.internal_product_id, [r.listing_id for r in rows], window_hours, request_id, batch.operation)
         for row in rows:
             row.retry_batch_id = result
         await self.session.flush()
@@ -196,9 +228,24 @@ async def request_guard(target_id, token):
         if account_id is None:
             raise ValueError("账号归属已改变，禁止发送")
         listing = await session.get(InternalProductListing, row.listing_id, with_for_update=True)
-        if listing is None or (listing.owner_id, listing.internal_product_id, listing.account_id, listing.item_id, listing.state_version, listing.state) != (
-            batch.owner_id, batch.internal_product_id, row.account_id, row.item_id, row.expected_version, "active"):
+        if listing is None or (listing.owner_id, listing.internal_product_id, listing.account_id, listing.item_id, listing.state_version) != (
+            batch.owner_id, batch.internal_product_id, row.account_id, row.item_id, row.expected_version):
             raise ValueError("商品状态或关联已改变，禁止执行旧任务")
+        if batch.operation == "offline":
+            if listing.state != "active":
+                raise ValueError("商品状态或关联已改变，禁止执行旧任务")
+        elif batch.operation == "relist":
+            if listing.state != "offline" or listing.offline_reason != "inventory":
+                raise ValueError("商品状态或下架原因已改变，禁止执行恢复任务")
+            product = await session.get(InternalProduct, batch.internal_product_id, with_for_update=True)
+            occupied = await session.scalar(select(func.coalesce(func.sum(InventoryOrderHold.quantity), 0)).where(
+                InventoryOrderHold.internal_product_id == batch.internal_product_id,
+                InventoryOrderHold.status.in_(["reserved", "refund_hold"]),
+            ))
+            if product is None or product.total_stock is None or product.total_stock - int(occupied or 0) <= 0:
+                raise ValueError("可用库存不足，禁止执行恢复任务")
+        else:
+            raise ValueError("不支持的商品操作")
         schedule = (await session.scalars(select(Schedule).where(Schedule.owner_id == batch.owner_id,
             Schedule.internal_product_id == batch.internal_product_id).with_for_update())).one()
         earliest = next_allowed_start(row.scheduled_at, schedule.last_request_started_at,
@@ -234,10 +281,20 @@ async def finish(target_id, token, status, message, retry_at=None):
             if status == "success":
                 listing = await session.get(InternalProductListing, row.listing_id, with_for_update=True)
                 if listing and listing.state_version == row.expected_version:
-                    listing.state, listing.offline_reason, listing.pending_action = "offline", "manual", None
-                    listing.state_version += 1
+                    if batch.operation == "offline" and listing.state == "active":
+                        listing.state, listing.offline_reason = "offline", "manual"
+                        listing.pending_action = None
+                        listing.state_version += 1
+                    elif batch.operation == "relist" and listing.state == "offline" and listing.offline_reason == "inventory":
+                        listing.state, listing.offline_reason = "active", None
+                        listing.pending_action = None
+                        listing.state_version += 1
+                    else:
+                        message = ("平台已确认下架，但本地状态已变更，请同步核对" if batch.operation == "offline" else
+                                   "平台已确认恢复，但本地状态已变更，请同步核对")
                 else:
-                    message = "平台已确认下架，但本地状态已变更，请同步核对"
+                    message = ("平台已确认下架，但本地状态已变更，请同步核对" if batch.operation == "offline" else
+                               "平台已确认恢复，但本地状态已变更，请同步核对")
         row.message = message[:1000]
         attempt.status, attempt.message, attempt.finished_at = status, row.message, now
         schedule = (await session.scalars(select(Schedule).where(Schedule.owner_id == batch.owner_id,
@@ -259,7 +316,13 @@ async def run_one():
                 XYAccount.account_id == row.account_id))).one_or_none()
             if not account or not account.cookie:
                 raise ValueError("账号不存在或未登录，未发送请求")
-            result = await asyncio.wait_for(offline_listing(row.account_id, account.cookie, row.item_id,
+            if batch.operation == "offline":
+                adapter = offline_listing
+            elif batch.operation == "relist":
+                adapter = relist_listing
+            else:
+                raise ValueError("不支持的商品操作")
+            result = await asyncio.wait_for(adapter(row.account_id, account.cookie, row.item_id,
                 batch.owner_id, lambda: request_guard(target_id, token)), timeout=60)
         status = result.get("status", "unknown")
         if status not in {"success", "failed", "unknown"}:
