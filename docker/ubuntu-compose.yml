@@ -1,0 +1,142 @@
+name: ${COMPOSE_PROJECT_NAME:-xianyu-ubuntu}
+services:
+  mysql:
+    image: ${MYSQL_IMAGE:-mysql:8.0.39}
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-xianyu_data}
+      MYSQL_USER: ${MYSQL_USER:-xianyu}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      TZ: ${TZ:-Asia/Shanghai}
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--max-connections=300", "--max-allowed-packet=256M", "--default-time-zone=+08:00"]
+    volumes: [mysql_data:/var/lib/mysql]
+    networks: [app]
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 45s
+  redis:
+    image: ${REDIS_IMAGE:-redis:7.2-alpine}
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes: [redis_data:/data]
+    networks: [app]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $${REDIS_PASSWORD} ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+  backend-web:
+    image: xianyu-ubuntu/backend-web:${RELEASE_VERSION:-local}
+    build: {context: .., dockerfile: backend-web/Dockerfile}
+    restart: unless-stopped
+    environment: &app-env
+      ENVIRONMENT: production
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_USER: ${MYSQL_USER:-xianyu}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-xianyu_data}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_DB: ${REDIS_DB:-0}
+      HOST: 0.0.0.0
+      BACKEND_WEB_PORT: "8089"
+      WEBSOCKET_SERVICE_URL: http://websocket:8090
+      SCHEDULER_SERVICE_URL: http://scheduler:8091
+      STATIC_DIR: /app/static
+      BACKUP_DIR: /app/backups
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+      BROWSER_HEADLESS: "true"
+      AUTO_START_CRAWL_JOBS: ${AUTO_START_CRAWL_JOBS:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SQL_ECHO: ${SQL_ECHO:-false}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes: [backend_logs:/app/backend-web/logs, static_files:/app/static, backup_files:/app/backups]
+    networks: [app]
+    depends_on:
+      mysql: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8089/health >/dev/null"]
+      interval: 20s
+      timeout: 8s
+      retries: 8
+      start_period: 90s
+  websocket:
+    image: xianyu-ubuntu/websocket:${RELEASE_VERSION:-local}
+    build: {context: .., dockerfile: websocket/Dockerfile}
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      WEBSOCKET_PORT: "8090"
+      BACKEND_WEB_SERVICE_URL: http://backend-web:8089
+      AUTO_START_WEBSOCKET: ${AUTO_START_WEBSOCKET:-true}
+      MAX_CAPTCHA_CONCURRENT: ${MAX_CAPTCHA_CONCURRENT:-3}
+    volumes: [websocket_logs:/app/websocket/logs, static_files:/app/static, browser_data:/app/browser_data]
+    networks: [app]
+    depends_on:
+      mysql: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      backend-web: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8090/health >/dev/null"]
+      interval: 20s
+      timeout: 8s
+      retries: 8
+      start_period: 90s
+  scheduler:
+    image: xianyu-ubuntu/scheduler:${RELEASE_VERSION:-local}
+    build: {context: .., dockerfile: scheduler/Dockerfile}
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      SCHEDULER_PORT: "8091"
+      WEBSOCKET_SERVICE_URL: http://websocket:8090
+      BACKEND_WEB_SERVICE_URL: http://backend-web:8089
+      REDELIVERY_INTERVAL: ${REDELIVERY_INTERVAL:-5}
+      RATE_INTERVAL: ${RATE_INTERVAL:-20}
+    volumes: [scheduler_logs:/app/scheduler/logs, static_files:/app/static:ro, backup_files:/app/backups]
+    networks: [app]
+    depends_on:
+      mysql: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      backend-web: {condition: service_healthy}
+      websocket: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8091/health >/dev/null"]
+      interval: 20s
+      timeout: 8s
+      retries: 8
+      start_period: 90s
+  frontend:
+    image: xianyu-ubuntu/frontend:${RELEASE_VERSION:-local}
+    build: {context: .., dockerfile: nginx/Dockerfile}
+    restart: unless-stopped
+    environment: [TZ=${TZ:-Asia/Shanghai}]
+    ports: ["${PUBLIC_HTTP_PORT:-8080}:80"]
+    networks: [app]
+    depends_on:
+      backend-web: {condition: service_healthy}
+      websocket: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:80/ >/dev/null"]
+      interval: 20s
+      timeout: 8s
+      retries: 8
+networks: {app: {driver: bridge}}
+volumes:
+  mysql_data:
+  redis_data:
+  backend_logs:
+  websocket_logs:
+  scheduler_logs:
+  static_files:
+  backup_files:
+  browser_data:
