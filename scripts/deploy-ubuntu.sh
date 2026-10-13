@@ -98,11 +98,18 @@ verify_health(){
   body="$(curl --fail --silent --show-error "http://127.0.0.1:$port/health")" || { log "public health endpoint failed"; return 1; }
   grep -q '"database"[[:space:]]*:[[:space:]]*"connected"' <<<"$body" || { log "public health reports database not connected"; return 1; }
 }
-# 首次部署导入旧服务器数据（scripts/export-for-migration.sh 导出）；只允许导入到空数据库
+# 首次部署导入旧服务器数据（scripts/export-for-migration.sh 导出）；只允许导入到空数据库。
+# 导入成功后记录数据包校验值：首装中途失败后用同一个数据包重跑会跳过导入，不会重复导入或误拒绝。
+IMPORT_MARKER_FILE="${STATE_DIR}/imported-database.sha256"
 import_database(){
   [[ -n "$IMPORT_DIR" ]] || return 0
   [[ -f "$IMPORT_DIR/database.sql.gz" ]] || die "IMPORT_DIR must contain database.sql.gz"
-  local tables
+  local tables digest
+  digest="$(sha256sum "$IMPORT_DIR/database.sql.gz" | awk '{print $1}')"
+  if [[ -f "$IMPORT_MARKER_FILE" && "$(cat "$IMPORT_MARKER_FILE")" == "$digest" ]]; then
+    log "this data bundle was already imported; skipping database import"
+    return 0
+  fi
   # shellcheck disable=SC2016
   tables="$(compose exec -T mysql sh -c 'mysql -N -uroot -p"$MYSQL_ROOT_PASSWORD" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '"'"'$MYSQL_DATABASE'"'"'"' 2>/dev/null | tr -dc '0-9')" || true
   [[ "$tables" =~ ^[0-9]+$ ]] || die "cannot inspect target database before import"
@@ -111,6 +118,7 @@ import_database(){
   fi
   log "importing database from $IMPORT_DIR/database.sql.gz"
   gzip -dc "$IMPORT_DIR/database.sql.gz" | compose exec -T mysql sh -c 'exec mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'
+  printf '%s\n' "$digest" > "$IMPORT_MARKER_FILE"; chmod 600 "$IMPORT_MARKER_FILE"
   log "database import finished"
 }
 import_files(){

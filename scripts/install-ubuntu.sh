@@ -29,7 +29,8 @@ Usage: sudo bash scripts/install-ubuntu.sh [options]
   --port N           Public HTTP port for the web UI (default 80)
   --public-url URL   Public base URL, e.g. http://1.2.3.4 (used in generated links; optional)
   --import PATH      Import data exported by scripts/export-for-migration.sh
-                     (a .tar.gz bundle or its extracted directory); fresh install only
+                     (a .tar.gz bundle or its extracted directory); only into an empty
+                     database. Re-running the same command after a failure is safe.
   --pip-index URL    PyPI mirror for image builds (default: Tencent Cloud mirror)
   --no-swap          Do not create a swap file on small-memory servers
   --no-registry-mirror  Do not configure Docker Hub mirrors
@@ -81,7 +82,7 @@ ensure_swap(){
 prepare_import(){
   [[ -n "$IMPORT" ]] || return 0
   [[ -e "$IMPORT" ]] || die "--import path not found: $IMPORT"
-  if [[ -f "$ENV_FILE" ]]; then die "--import is only for the first install ($ENV_FILE already exists)"; fi
+  # 是否允许导入由 deploy-ubuntu.sh 判断：空库才导入；同一数据包已导入过则跳过（首装中途失败可原样重跑）
   local dir found
   if [[ -d "$IMPORT" ]]; then
     dir="$(cd "$IMPORT" && pwd)"
