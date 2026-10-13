@@ -16,3 +16,6 @@ update.sh
 .env
 .env.*
 docker-compose.yml
+# server-side runtime data (deploy.sh / deploy-ubuntu.sh), never needed in images
+xianyu_auto_reply
+.ubuntu-deploy

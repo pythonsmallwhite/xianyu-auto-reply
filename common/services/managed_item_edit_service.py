@@ -6,6 +6,7 @@ payload snapshot and must never include history/unknown catalog rows.
 """
 from __future__ import annotations
 
+import asyncio
 import copy
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
@@ -442,6 +443,23 @@ async def recover() -> None:
             await finish(target_id, token, "unknown" if started else "failed", "执行进程中断；已发起请求须核对，未发起可手动重试")
 
 
+async def run_forever(stop: asyncio.Event) -> None:
+    """后台执行器：回收过期租约后逐个执行到期目标，空闲时等待 3 秒或停止信号。"""
+    from loguru import logger
+
+    while not stop.is_set():
+        try:
+            await recover()
+            if await run_one():
+                continue
+        except Exception:
+            logger.exception("持久批量编辑执行器异常")
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=3)
+        except asyncio.TimeoutError:
+            pass
+
+
 __all__ = [
     "ManagedItemEditService",
     "database_now",
@@ -450,4 +468,5 @@ __all__ = [
     "finish",
     "run_one",
     "recover",
+    "run_forever",
 ]

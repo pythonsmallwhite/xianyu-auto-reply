@@ -11,5 +11,6 @@ COPY docker/ubuntu-nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /app/dist /usr/share/nginx/html
 EXPOSE 80
 ENV TZ=Asia/Shanghai
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 CMD wget --no-verbose --tries=1 --spider http://localhost:80/ || exit 1
+# 用 127.0.0.1：busybox wget 会把 localhost 解析成 ::1，而 nginx 只监听 IPv4，会被误判为 unhealthy
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:80/ || exit 1
 CMD ["nginx", "-g", "daemon off;"]
