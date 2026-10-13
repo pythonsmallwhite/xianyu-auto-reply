@@ -22,6 +22,13 @@ check "failed switch rolls back" bash -c "grep -A3 'if ! switch_to \"\$LOCAL_REG
 check "mysql and redis untouched" bash -c "grep -Eq '^APP_SERVICES=\(backend-web websocket scheduler frontend\)$' '$SCRIPT'"
 check "no volume removal" bash -c "! grep -Eq 'down -v|volume rm|rm -rf .*mysql' '$SCRIPT'"
 check "waits for disk space" contains 'wait_disk "$MIN_BUILD_FREE_MB"' "$SCRIPT"
+OVERLAY="$ROOT/docker/app-overlay.Dockerfile"
+check "fast build is the default" contains 'FULL_BUILD="${FULL_BUILD:-0}"' "$SCRIPT"
+check "fast build uses overlay Dockerfile" contains 'OVERLAY_DOCKERFILE="docker/app-overlay.Dockerfile"' "$SCRIPT"
+check "overlay never runs apt" bash -c "! grep -q 'apt-get' '$OVERLAY'"
+check "overlay removes old source before copying" order 'rm -rf /app/common' 'COPY common /app/common' "$OVERLAY"
+check "overlay installs new python deps" contains 'pip install --no-cache-dir -r /tmp/requirements.txt' "$OVERLAY"
+check "full build refreshes deps base" contains 'docker tag "${target}:${sha}" "${target}:deps"' "$SCRIPT"
 
 # Sandboxed function tests: source the script (main is guarded) against a temp .env.
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
@@ -39,6 +46,32 @@ check "env_set/env_get update, append and CRLF-safe read" test "$(printf '%s' "$
 check "env_set with empty value deletes key" test "$(printf '%s' "$result" | tail -1)" = "0"
 check "other keys preserved" grep -q '^OTHER=1$' "$tmp/.env"
 check "dockerfile_for maps frontend" test "$(bash -c 'source "'"$SCRIPT"'"; dockerfile_for frontend')" = "nginx/Dockerfile"
+
+# deps_base_for with a stub docker: images listed in $tmp/images exist; `docker tag a b` adds b.
+mkdir -p "$tmp/bin"
+cat > "$tmp/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  image) grep -qxF "$3" "$STUB_IMAGES" ;;
+  tag) echo "$3" >> "$STUB_IMAGES"; echo "tag $2 -> $3" >> "$STUB_IMAGES.log" ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$tmp/bin/docker"
+base_case(){  # $1 = images present (space separated); prints chosen base and tag log
+  printf '%s\n' $1 > "$tmp/images"; : > "$tmp/images.log"
+  printf 'IMAGE_REGISTRY=registry.example.com/up\nIMAGE_TAG=latest\n' > "$tmp/.env"
+  PATH="$tmp/bin:$PATH" STUB_IMAGES="$tmp/images" ENV_FILE="$tmp/.env" bash -c 'source "'"$SCRIPT"'"; deps_base_for backend-web' 2>/dev/null
+  echo "rc=$?"; cat "$tmp/images.log"
+}
+out="$(base_case "xianyu-local/xianyu-backend-web:latest registry.example.com/up/xianyu-backend-web:latest")"
+check "base prefers previous local build and pins it as :deps" bash -c "printf '%s' '$out' | grep -q '^xianyu-local/xianyu-backend-web:deps$' && printf '%s' '$out' | grep -q 'tag xianyu-local/xianyu-backend-web:latest -> xianyu-local/xianyu-backend-web:deps'"
+out="$(base_case "registry.example.com/up/xianyu-backend-web:latest")"
+check "base falls back to configured upstream image" bash -c "printf '%s' '$out' | grep -q 'tag registry.example.com/up/xianyu-backend-web:latest -> xianyu-local/xianyu-backend-web:deps'"
+out="$(base_case "xianyu-local/xianyu-backend-web:deps xianyu-local/xianyu-backend-web:latest")"
+check "existing :deps is reused without re-tagging" bash -c "printf '%s' '$out' | grep -q 'rc=0' && ! printf '%s' '$out' | grep -q '^tag '"
+out="$(base_case "")"
+check "no base image means full build" bash -c "printf '%s' '$out' | grep -q 'rc=1'"
 
 if (( failures )); then printf '%d check(s) failed\n' "$failures"; exit 1; fi
 echo "all update-server checks passed"

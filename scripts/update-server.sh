@@ -6,10 +6,14 @@
 #   bash scripts/update-server.sh            # 构建 → 备份数据库 → 逐个切换 → 健康检查，失败自动回滚
 #   bash scripts/update-server.sh rollback   # 切回上一次的镜像
 #   bash scripts/update-server.sh status     # 查看当前镜像与健康状态
+# 构建方式：
+#   默认快速构建：Python 服务以服务器上已有的同服务镜像为底座（docker/app-overlay.Dockerfile），
+#   只替换源码、补装新增 Python 依赖，不跑 apt、不下载浏览器；底座固定为 xianyu-local/xianyu-<服务>:deps。
+#   FULL_BUILD=1：按各服务 Dockerfile 完整构建（需要大量下载和约 3GB 空闲磁盘），成功后刷新 :deps 底座。
 # 可选环境变量：
 #   PIP_INDEX_URL=...     构建时的 PyPI 镜像（默认腾讯云，适合腾讯云服务器）
 #   SKIP_BACKUP=1         跳过数据库备份（不建议）
-#   MIN_BUILD_FREE_MB=3072 / MIN_SWITCH_FREE_MB=1024   构建/切换前要求的最小剩余磁盘
+#   MIN_BUILD_FREE_MB / MIN_SWITCH_FREE_MB   构建/切换前要求的最小剩余磁盘（MB）
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -20,7 +24,10 @@ BACKUP_DIR="${ROOT_DIR}/xianyu_auto_reply/backups/update-server"
 LOCAL_REGISTRY="xianyu-local"
 APP_SERVICES=(backend-web websocket scheduler frontend)
 PIP_INDEX_URL="${PIP_INDEX_URL:-https://mirrors.cloud.tencent.com/pypi/simple}"
-MIN_BUILD_FREE_MB="${MIN_BUILD_FREE_MB:-3072}"
+FULL_BUILD="${FULL_BUILD:-0}"
+OVERLAY_DOCKERFILE="docker/app-overlay.Dockerfile"
+UPSTREAM_REGISTRY="registry.cn-shanghai.aliyuncs.com/zhinian-software"
+if [[ "$FULL_BUILD" == 1 ]]; then MIN_BUILD_FREE_MB="${MIN_BUILD_FREE_MB:-3072}"; else MIN_BUILD_FREE_MB="${MIN_BUILD_FREE_MB:-1024}"; fi
 MIN_SWITCH_FREE_MB="${MIN_SWITCH_FREE_MB:-1024}"
 HEALTH_TIMEOUT_SEC="${HEALTH_TIMEOUT_SEC:-300}"
 
@@ -120,25 +127,57 @@ preflight(){
   flock -n 9 || die "another update-server run is in progress"
 }
 
+image_exists(){ docker image inspect "$1" >/dev/null 2>&1; }
+
+# 快速构建的底座：固定为 xianyu-local/xianyu-<服务>:deps，避免每次在上一次产物上继续叠层。
+# 首次没有 :deps 时，依次取上次本仓库构建的 :latest、.env 当前配置的镜像、上游默认镜像，并打上 :deps 标签。
+# 输出底座镜像名；找不到可用底座返回 1（调用方改为完整构建）。
+deps_base_for(){
+  local service="$1" deps cfg_registry cfg_tag candidate
+  deps="${LOCAL_REGISTRY}/xianyu-${service}:deps"
+  if image_exists "$deps"; then echo "$deps"; return 0; fi
+  cfg_registry="$(env_get IMAGE_REGISTRY)"; cfg_tag="$(env_get IMAGE_TAG)"
+  for candidate in \
+    "${LOCAL_REGISTRY}/xianyu-${service}:latest" \
+    "${cfg_registry:-$UPSTREAM_REGISTRY}/xianyu-${service}:${cfg_tag:-latest}" \
+    "${UPSTREAM_REGISTRY}/xianyu-${service}:latest"; do
+    if image_exists "$candidate"; then
+      docker tag "$candidate" "$deps" || return 1
+      printf '[update-server] fast-build base for %s: %s (tagged %s)\n' "$service" "$candidate" "$deps" >&2
+      echo "$deps"; return 0
+    fi
+  done
+  return 1
+}
+
 build_images(){
-  local sha="$1" service file
+  local sha="$1" service file base
   if [[ -n "$(git status --porcelain --untracked-files=no -- backend-web websocket scheduler common launcher frontend nginx docker)" ]]; then
     log "WARNING: tracked source files have local changes; they will be built into the images"
   fi
   for service in "${APP_SERVICES[@]}"; do
-    if docker image inspect "${LOCAL_REGISTRY}/xianyu-${service}:${sha}" >/dev/null 2>&1; then
+    local target="${LOCAL_REGISTRY}/xianyu-${service}"
+    if image_exists "${target}:${sha}"; then
       log "image xianyu-${service}:${sha} already built, skip"; continue
     fi
-    file="$(dockerfile_for "$service")"
     wait_disk "$MIN_BUILD_FREE_MB"
-    log "building $service from $file @ $sha"
     local args=()
     if [[ "$service" != frontend ]]; then
       args=(--build-arg "PIP_INDEX_URL=${PIP_INDEX_URL}" --build-arg PIP_DEFAULT_TIMEOUT=180)
     fi
-    DOCKER_BUILDKIT=1 docker build ${args[@]+"${args[@]}"} -f "$file" \
-      -t "${LOCAL_REGISTRY}/xianyu-${service}:${sha}" -t "${LOCAL_REGISTRY}/xianyu-${service}:latest" . \
+    if [[ "$service" != frontend && "$FULL_BUILD" != 1 ]] && base="$(deps_base_for "$service")"; then
+      log "fast build $service @ $sha on $base (source only, no apt / browser download)"
+      DOCKER_BUILDKIT=1 docker build "${args[@]}" --build-arg "BASE_IMAGE=${base}" --build-arg "SERVICE=${service}" \
+        -f "$OVERLAY_DOCKERFILE" -t "${target}:${sha}" -t "${target}:latest" . \
+        || die "build failed for $service; running services were not touched (re-run to resume, or FULL_BUILD=1)"
+      continue
+    fi
+    file="$(dockerfile_for "$service")"
+    log "full build $service from $file @ $sha"
+    DOCKER_BUILDKIT=1 docker build ${args[@]+"${args[@]}"} -f "$file" -t "${target}:${sha}" -t "${target}:latest" . \
       || die "build failed for $service; running services were not touched (re-run to resume)"
+    # 完整构建产物包含最新的系统依赖与浏览器，作为后续快速构建的底座
+    if [[ "$service" != frontend ]]; then docker tag "${target}:${sha}" "${target}:deps"; fi
   done
 }
 
@@ -212,7 +251,7 @@ update(){
   log "update finished: all services on ${LOCAL_REGISTRY}/*:${sha}"
   docker builder prune -f >/dev/null 2>&1 && log "build cache pruned" || true
   status
-  log "old images are kept for rollback; after confirming, you may remove them with: docker image prune -a (removes ALL unused images)"
+  log "previous images are kept for rollback; keep the xianyu-local/*:deps images (fast-build bases) when cleaning up"
 }
 
 SWITCHING=0
