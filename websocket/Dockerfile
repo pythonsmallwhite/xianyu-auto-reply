@@ -22,7 +22,9 @@ COPY common /app/common
 COPY websocket /app/websocket
 COPY launcher /app/launcher
 
-# 从pyproject.toml提取并安装依赖
+# 从pyproject.toml提取并安装依赖（可用 --build-arg PIP_INDEX_URL=... 切换到服务器所在云厂商的内网镜像）
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PIP_DEFAULT_TIMEOUT=120
 RUN python -c "\
 import tomllib; \
 deps = tomllib.load(open('/app/websocket/pyproject.toml','rb')).get('project',{}).get('dependencies',[]); \
