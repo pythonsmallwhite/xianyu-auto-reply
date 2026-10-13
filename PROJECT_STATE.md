@@ -894,3 +894,12 @@
 - 提交边界：以上全部为工作区未暂存改动，未 commit/push；既有未跟踪 `.workbuddy/`、`outputs/`、`frontend/dist-publish-check/` 未触碰（其中旧构建产物仍含广告代码，不参与部署）。
 - 部署方式核对：根目录 `deploy.sh`、`deploy_remote.sh`、`update.sh` 使用上游预构建镜像 `registry.cn-shanghai.aliyuncs.com/zhinian-software/*:latest`，README 的 `curl ... xy-update.zhinianboke.com/... | bash` 也是拉上游脚本；用这些方式部署的服务器运行的是原作者镜像，本仓库改动不会生效。`scripts/deploy-ubuntu.sh`（`docker/ubuntu-compose.yml`）与根 `docker-compose.yml` 才从本仓库源码构建。另：HEAD 含上述正则缺陷，本修复前源码构建前端会在 `tsc` 失败，故用户当前服务器很可能运行的是上游镜像（未核实，未登录服务器）。
 - 下一步第一件事：确认用户服务器的部署方式；用户确认后提交并推送，服务器 `git pull` 后执行 `bash scripts/deploy-ubuntu.sh deploy` 从源码重新构建，浏览器确认登录页、仪表盘、顶部公告和弹窗均无广告。自用升级只用本仓库脚本，不再运行上游一键脚本或 `update.sh`。
+
+### 2026-10-13：推送 480a684 并通过 Chaterm 更新服务器（R16 部署，进行中）
+
+- 用户授权：推送到自己的远端，并通过本地 Chaterm MCP（`http://127.0.0.1:9727/mcp`，工具 `chaterm_list_targets`/`chaterm_exec`）连接 101.34.32.188 更新已部署服务；更新方式用户选“先关开关，再源码构建”。
+- 已提交并推送：`480a684 feat: remove ads, remote official content and demo code for self-hosting`（73 个已跟踪文件，含本文），远端 `pythonsmallwhite/xianyu-auto-reply` `main` 核对为 480a684。`.workbuddy/`、`outputs/`、`frontend/dist-publish-check/` 未提交。
+- 服务器实况（只读核对）：CentOS 7、Docker 26.1.4、Compose v2.27.1、4 核 / 3.6G 内存 / 根分区剩余约 13G。部署目录 `/opt/xianyu-auto-reply`（本 fork 的浅克隆，原 HEAD b6a2cf6），运行 `docker-compose.deploy.yml`（未跟踪文件），六个容器均为上游镜像 `registry.cn-shanghai.aliyuncs.com/zhinian-software/*`；另有无关容器 `llonebot` 未触碰。数据卷在 `./xianyu_auto_reply/{mysql,redis,static,backups,logs,browser_data}`。服务器本地对 `deploy.sh`/`update.sh`/`docker-compose.deploy.yml` 的 frontend 加了 `security_opt: seccomp=unconfined`（非本轮所加，已保留）。frontend 健康检查原本即 unhealthy（`wget localhost:80` 走 IPv6 被拒），站点仍可访问，未处理。
+- 第一步已完成：备份 `.env` 为 `.env.bak.20261013150226`，三个 `ENABLE_REMOTE_*` 改为 false，仅重建 backend-web；容器内环境变量已生效，`/api/v1/advertisements/public`、`/announcements/public`、`/popup-announcements/public` 均返回空列表，backend-web healthy。
+- 第二步进行中：mysqldump 全库备份 `xianyu_auto_reply/backups/pre-fork-switch/mysql-20261013150424.sql.gz`（约 0.9MB，105 张表，dump completed）；服务器本地 seccomp 改动保存为 `.server-local-seccomp.patch`，`git pull --ff-only` 到 480a684 后已重新应用。后台脚本 `.build-fork-images.sh` 构建 `xianyu-local/xianyu-{backend-web,websocket,scheduler,frontend}:480a684`（日志 `.build-fork-images.log`，完成标记 `.done`/`.failed`），上游镜像保留用于回滚。
+- 切换计划：构建全部成功后把 `.env` 的 `IMAGE_REGISTRY=xianyu-local`、`IMAGE_TAG=480a684`（MySQL/Redis 镜像变量不动），`docker compose -f docker-compose.deploy.yml --env-file .env up -d backend-web websocket scheduler frontend`；fork 后端启动时执行 `init_database`，这是 fork 迁移首次作用于真实 MySQL。回滚：恢复 `.env` 中 `IMAGE_REGISTRY`/`IMAGE_TAG` 原值并 `up -d` 同四个服务；如需恢复数据用上述 dump。

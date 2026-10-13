@@ -30,6 +30,8 @@ open('/tmp/requirements.txt','w').write('\n'.join(deps))" && \
     pip install --no-cache-dir -r /tmp/requirements.txt
 
 # 安装Playwright浏览器（--with-deps 自动安装系统依赖）
+# 浏览器下载走国内镜像（官方 CDN 国内常超时）；需要官方源时用 --build-arg PLAYWRIGHT_DOWNLOAD_HOST= 覆盖
+ARG PLAYWRIGHT_DOWNLOAD_HOST=https://registry.npmmirror.com/-/binary/playwright
 RUN python -m playwright install --with-deps chromium
 RUN python -m patchright install --with-deps chromium
 
