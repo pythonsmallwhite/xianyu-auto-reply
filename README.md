@@ -6,6 +6,24 @@
 
 > 本仓库为自用部署的 fork，已移除广告、远程官方公告、演示账号及第三方推广内容。原项目：[zhinianboke/xianyu-auto-reply](https://github.com/zhinianboke/xianyu-auto-reply)（AGPL-3.0）。
 
+## 本 fork 部署（Ubuntu 24.04，从源码构建）
+
+下文“一键部署”章节的 `curl ... | bash` 与根目录 `deploy.sh`/`update.sh` 使用原作者预构建镜像，不包含本 fork 的改动。本 fork 请用：
+
+```bash
+# 新服务器（root）
+apt-get update && apt-get install -y git
+git clone https://github.com/pythonsmallwhite/xianyu-auto-reply.git /opt/xianyu-auto-reply
+cd /opt/xianyu-auto-reply
+bash scripts/install-ubuntu.sh --port 80          # 安装 Docker、生成密码、构建镜像并启动
+
+# 更新
+git pull && bash scripts/deploy-ubuntu.sh update   # 失败自动回滚到上一个成功版本
+bash scripts/deploy-ubuntu.sh status | logs | rollback | backup
+```
+
+从旧服务器（`deploy.sh` 部署）迁移：先在旧服务器执行 `bash scripts/export-for-migration.sh` 并把生成的 `migration-export/xianyu-export-*.tar.gz` 下载到本地，重装后上传，用 `bash scripts/install-ubuntu.sh --port 80 --import <文件>` 导入。配置与密码在 `.ubuntu-deploy/.env`（仅 root 可读）。
+
 ---
 
 ## 功能概览

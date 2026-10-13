@@ -6,6 +6,13 @@
 # 环境变量文件（包含敏感信息）
 # ------------------------------------------
 **/.env
+**/.env.bak.*
+# 服务器部署状态、备份与迁移导出（含密码、数据库与 Cookie）
+.ubuntu-deploy/
+migration-export/
+.update-server.state
+.update-server.lock
+update.log
 **/.env.local
 **/.env.*.local
 .env.enc

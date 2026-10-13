@@ -32,7 +32,7 @@ services:
       start_period: 15s
   backend-web:
     image: xianyu-ubuntu/backend-web:${RELEASE_VERSION:-local}
-    build: {context: .., dockerfile: backend-web/Dockerfile}
+    build: {context: .., dockerfile: backend-web/Dockerfile, args: {PIP_INDEX_URL: "${PIP_INDEX_URL:-https://mirrors.cloud.tencent.com/pypi/simple}"}}
     restart: unless-stopped
     environment: &app-env
       ENVIRONMENT: production
@@ -52,6 +52,8 @@ services:
       STATIC_DIR: /app/static
       BACKUP_DIR: /app/backups
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      FRONTEND_PUBLIC_URL: ${FRONTEND_PUBLIC_URL:-}
+      BACKEND_WEB_PUBLIC_URL: ${BACKEND_WEB_PUBLIC_URL:-http://127.0.0.1:8089}
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
       BROWSER_HEADLESS: "true"
       AUTO_START_CRAWL_JOBS: ${AUTO_START_CRAWL_JOBS:-true}
@@ -71,7 +73,7 @@ services:
       start_period: 90s
   websocket:
     image: xianyu-ubuntu/websocket:${RELEASE_VERSION:-local}
-    build: {context: .., dockerfile: websocket/Dockerfile}
+    build: {context: .., dockerfile: websocket/Dockerfile, args: {PIP_INDEX_URL: "${PIP_INDEX_URL:-https://mirrors.cloud.tencent.com/pypi/simple}"}}
     restart: unless-stopped
     environment:
       <<: *app-env
@@ -93,7 +95,7 @@ services:
       start_period: 90s
   scheduler:
     image: xianyu-ubuntu/scheduler:${RELEASE_VERSION:-local}
-    build: {context: .., dockerfile: scheduler/Dockerfile}
+    build: {context: .., dockerfile: scheduler/Dockerfile, args: {PIP_INDEX_URL: "${PIP_INDEX_URL:-https://mirrors.cloud.tencent.com/pypi/simple}"}}
     restart: unless-stopped
     environment:
       <<: *app-env
@@ -119,7 +121,8 @@ services:
     image: xianyu-ubuntu/frontend:${RELEASE_VERSION:-local}
     build: {context: .., dockerfile: nginx/Dockerfile}
     restart: unless-stopped
-    environment: [TZ=${TZ:-Asia/Shanghai}]
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
     ports: ["${PUBLIC_HTTP_PORT:-8080}:80"]
     networks: [app]
     depends_on:

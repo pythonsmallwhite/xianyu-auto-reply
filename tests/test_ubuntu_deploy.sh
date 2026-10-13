@@ -22,7 +22,7 @@ check "source scheduler build" contains 'dockerfile: scheduler/Dockerfile' "$COM
 check "source frontend build" contains 'dockerfile: nginx/Dockerfile' "$COMPOSE"
 check "MySQL health gate" contains 'mysql: {condition: service_healthy}' "$COMPOSE"
 check "Redis health gate" contains 'redis: {condition: service_healthy}' "$COMPOSE"
-check "migration failure is fatal" contains 'database migration failed; backup and logs were preserved' "$SCRIPT"
+check "migration failure is fatal" bash -c "grep -q 'fail_or_rollback \"database migration failed\"' '$SCRIPT' && grep -q 'die \"\$reason; backup and logs were preserved\"' '$SCRIPT'"
 check "no MySQL publication" bash -c "! grep -Eq '^[[:space:]]*-.*3306:' '$COMPOSE'"
 check "no Redis publication" bash -c "! grep -Eq '^[[:space:]]*-.*6379:' '$COMPOSE'"
 check "frontend only publication" contains 'PUBLIC_HTTP_PORT:-8080}:80' "$COMPOSE"

@@ -17,10 +17,8 @@ RUN apt-get update && apt-get install -y curl ca-certificates gcc \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# 复制项目源码
-COPY common /app/common
-COPY scheduler /app/scheduler
-COPY launcher /app/launcher
+# 先只复制依赖清单：源码变化不会让下面的 pip / 浏览器安装层失效，更新时只重建最后的源码层
+COPY scheduler/pyproject.toml /app/scheduler/pyproject.toml
 
 # 从pyproject.toml提取并安装依赖（可用 --build-arg PIP_INDEX_URL=... 切换到服务器所在云厂商的内网镜像）
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
@@ -35,6 +33,11 @@ open('/tmp/requirements.txt','w').write('\n'.join(deps))" && \
 # 浏览器下载走国内镜像（官方 CDN 国内常超时）；需要官方源时用 --build-arg PLAYWRIGHT_DOWNLOAD_HOST= 覆盖
 ARG PLAYWRIGHT_DOWNLOAD_HOST=https://registry.npmmirror.com/-/binary/playwright
 RUN python -m playwright install --with-deps chromium
+
+# 复制项目源码（放在依赖之后，充分利用构建缓存）
+COPY common /app/common
+COPY scheduler /app/scheduler
+COPY launcher /app/launcher
 
 # 创建日志目录
 RUN mkdir -p /app/scheduler/logs

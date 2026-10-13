@@ -17,10 +17,8 @@ RUN apt-get update && apt-get install -y curl ca-certificates gcc \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# 复制项目源码
-COPY common /app/common
-COPY websocket /app/websocket
-COPY launcher /app/launcher
+# 先只复制依赖清单：源码变化不会让下面的 pip / 浏览器安装层失效，更新时只重建最后的源码层
+COPY websocket/pyproject.toml /app/websocket/pyproject.toml
 
 # 从pyproject.toml提取并安装依赖（可用 --build-arg PIP_INDEX_URL=... 切换到服务器所在云厂商的内网镜像）
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
@@ -36,6 +34,11 @@ open('/tmp/requirements.txt','w').write('\n'.join(deps))" && \
 ARG PLAYWRIGHT_DOWNLOAD_HOST=https://registry.npmmirror.com/-/binary/playwright
 RUN python -m playwright install --with-deps chromium
 RUN python -m patchright install --with-deps chromium
+
+# 复制项目源码（放在依赖之后，充分利用构建缓存）
+COPY common /app/common
+COPY websocket /app/websocket
+COPY launcher /app/launcher
 
 # 创建日志目录
 RUN mkdir -p /app/websocket/logs /app/static /app/browser_data
