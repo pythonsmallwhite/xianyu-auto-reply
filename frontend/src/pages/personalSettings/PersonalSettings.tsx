@@ -45,7 +45,6 @@ const PAYMENT_TYPE_KEY = 'payment_type'
 const CARD_SECRET_KEY = 'distribution.card_secret_key'
 const LOCATION_CHAT_REMOTE_URL_KEY = 'location_chat.remote_url'
 const LOCATION_CHAT_REMOTE_SECRET_KEY = 'location_chat.remote_secret_key'
-const DEFAULT_LOCATION_CHAT_REMOTE_URL = 'https://api.xianyushop.shop/api/external/invoke'
 
 export function PersonalSettings() {
   const { addToast } = useUIStore()
@@ -152,7 +151,7 @@ export function PersonalSettings() {
         setCardSecretKey(cardKeyResult.value)
       }
       const locationUrlResult = await getUserSetting(LOCATION_CHAT_REMOTE_URL_KEY)
-      setLocationRemoteUrl(locationUrlResult.value || DEFAULT_LOCATION_CHAT_REMOTE_URL)
+      setLocationRemoteUrl(locationUrlResult.value || '')
       const locationSecretResult = await getUserSetting(LOCATION_CHAT_REMOTE_SECRET_KEY)
       setLocationRemoteSecretKey(locationSecretResult.value || '')
       // 加载当前用户到期日
@@ -795,8 +794,6 @@ export function PersonalSettings() {
           <div>
             <label className="input-label">对接卡密秘钥</label>
             <p className="text-xs text-gray-500 mb-2">用于「分销卡券」页面对接上游卡券系统的鉴权秘钥，请妥善保管。修改后点击「保存」生效。</p>
-            <p className="text-xs text-gray-500 mb-2">秘钥资金流水和余额充值，请进入 <a className="text-xs text-blue-600 dark:text-blue-400 mb-2" href="http://agent.zhinianboke.com" target='_BLANK'>agent.zhinianboke.com</a> 中进行操作。</p>
-            <p className="text-xs text-blue-600 dark:text-blue-400 mb-2">如有其他疑问可联系 QQ：531779708 微信：zhinian_znbk</p>
             <div className="flex items-center gap-3 flex-wrap">
               <div className="relative flex-1 min-w-[260px]">
                 <input
@@ -982,14 +979,11 @@ export function PersonalSettings() {
             <div className="space-y-4">
               <div className="input-group">
                 <label className="input-label">远程URL</label>
-                <input type="url" value={locationRemoteUrl} onChange={(e) => setLocationRemoteUrl(e.target.value)} placeholder={DEFAULT_LOCATION_CHAT_REMOTE_URL} className="input-ios" />
+                <input type="url" value={locationRemoteUrl} onChange={(e) => setLocationRemoteUrl(e.target.value)} placeholder="请输入远程接口URL" className="input-ios" />
               </div>
               <div className="input-group">
                 <label className="input-label">秘钥</label>
                 <input type="password" value={locationRemoteSecretKey} onChange={(e) => setLocationRemoteSecretKey(e.target.value)} placeholder="请输入远程接口秘钥" className="input-ios" autoComplete="off" />
-                <p className="text-xs text-red-500 mt-2">
-                  秘钥请到 <a className="underline" href="https://api.xianyushop.shop" target="_blank" rel="noopener noreferrer">https://api.xianyushop.shop</a> 网站的接口列表 “通过定位进行聊天” 接口获取
-                </p>
               </div>
               <div className="flex flex-wrap gap-3">
                 <button type="button" onClick={handleTestLocationRemote} disabled={testingLocationRemote || savingLocationRemote} className="btn-ios-secondary">

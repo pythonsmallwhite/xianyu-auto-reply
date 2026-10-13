@@ -11,14 +11,10 @@ import { useMenuVisibilityStore } from '@/store/menuVisibilityStore'
 import { applyThemeSettings, initializeThemeMode } from '@/utils/theme'
 import type { DisclaimerSettings } from '@/types'
 
-// 登录/注册/激活码页面保持同步导入（首屏必需）
+// 登录/注册页面保持同步导入（首屏必需）
 import { Login } from '@/pages/auth/Login'
 import { Register } from '@/pages/auth/Register'
 import { ForgotPassword } from '@/pages/auth/ForgotPassword'
-import { GetActivation } from '@/pages/auth/GetActivation'
-import { RenewActivation } from '@/pages/auth/RenewActivation'
-import { GetLocalVersion } from '@/pages/auth/GetLocalVersion'
-import { GetSourceCode } from '@/pages/auth/GetSourceCode'
 
 // 页面组件懒加载，按需加载提升首屏速度
 const Dashboard = React.lazy(() => import('@/pages/dashboard/Dashboard').then(m => ({ default: m.Dashboard })))
@@ -36,8 +32,6 @@ const MessageFilters = React.lazy(() => import('@/pages/messageFilters/MessageFi
 const Feedback = React.lazy(() => import('@/pages/feedback/Feedback'))
 const Announcements = React.lazy(() => import('@/pages/announcements/Announcements').then(m => ({ default: m.Announcements })))
 const PopupAnnouncements = React.lazy(() => import('@/pages/announcements/PopupAnnouncements').then(m => ({ default: m.PopupAnnouncements })))
-const AdManage = React.lazy(() => import('@/pages/advertisements/AdManage'))
-const AdApply = React.lazy(() => import('@/pages/advertisements/AdApply'))
 const Tutorial = React.lazy(() => import('@/pages/tutorial/Tutorial').then(m => ({ default: m.Tutorial })))
 const ItemSearch = React.lazy(() => import('@/pages/search/ItemSearch').then(m => ({ default: m.ItemSearch })))
 const GoofishCompass = React.lazy(() => import('@/pages/compass/GoofishCompass').then(m => ({ default: m.GoofishCompass })))
@@ -319,10 +313,6 @@ function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
-          <Route path="/get-activation" element={<GetActivation />} />
-          <Route path="/renew-activation" element={<RenewActivation />} />
-          <Route path="/get-local-version" element={<GetLocalVersion />} />
-          <Route path="/get-source-code" element={<GetSourceCode />} />
           {/* 兼职端扫码页面：无需登录，公开访问 */}
           <Route path="/shared-scan-page" element={<SharedScanPage />} />
           {/* 同意后发货提货页：无需登录，公开访问 */}
@@ -354,7 +344,6 @@ function App() {
             <Route path="notification-channels" element={<NotificationChannels />} />
             <Route path="message-notifications" element={<MessageNotifications />} />
             <Route path="feedback" element={<Feedback />} />
-            <Route path="ad-apply" element={<AdApply />} />
             <Route path="item-search" element={<ItemSearch />} />
             <Route path="goofish-compass" element={<GoofishCompass />} />
             <Route path="goofish-scheduled-crawler" element={<GoofishScheduledCrawler />} />
@@ -418,7 +407,6 @@ function App() {
             <Route path="admin/red-flower-batches/:batchId" element={<RedFlowerBatchDetailPage />} />
             <Route path="admin/scheduled-tasks" element={<ScheduledTasks />} />
             <Route path="admin/announcements" element={<Announcements />} />
-            <Route path="admin/ad-manage" element={<AdManage />} />
             <Route path="admin/popup-announcements" element={<PopupAnnouncements />} />
           </Route>
 

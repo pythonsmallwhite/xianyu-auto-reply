@@ -106,7 +106,7 @@
 | PUT | `/api/v1/feedbacks/{id}/resolve` | — | |
 | DELETE | `/api/v1/feedbacks/{id}` | — | |
 
-## 公告 / 广告 / 反馈
+## 公告 / 反馈
 
 | 方法 | 路径 | body | 备注 |
 |---|---|---|---|

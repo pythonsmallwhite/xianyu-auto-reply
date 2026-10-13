@@ -1,6 +1,6 @@
 # 项目需求与 AI 交接文档
 
-更新时间：2026-09-30（Asia/Shanghai；main / 8eb279c；原 Run 的聊天新终端 retry 已接受输入并 Working；原会话只读）
+更新时间：2026-10-13（Asia/Shanghai；main / b6a2cf6；本轮移除广告、远程官方内容、演示账号与第三方推广，改动未提交）
 
 > 发给下一位 AI 的统一入口，每轮开发结束必须更新。已收录需求确认稿 v0.5 全文及后续口径；原文中的建议和待定项不等于用户已确认需求。
 
@@ -42,6 +42,7 @@
 | R13 | 评估并修复聊天实时同步及移动可用性 | 用户要求评估 #304/#339；一期优先级为本轮技术建议 | 进行中；广播集合并发、历史错误伪空列表、切会话旧请求覆盖已修复并离线验证；本轮完成重连补拉（区分首连/重连）、稳定 `messageId` 去重合并、会话列表分页保留、非当前会话缓存更新、迟到发送结果按账号/会话隔离；Android 聊天详情与列表同步实现消息合并、重连补拉、账号标识、贴底滚动与分页入口修正，21 项离线场景通过并逐条变异证伪 | 浏览器/真机内真实重连与后台恢复交错验证、后台恢复缓存刷新穷尽验证、移动窄屏其余页面与 Release APK 真机验收仍未完成 |
 | R14 | Ubuntu 单台云服务器、一键部署 | 用户直接指定 / 本轮协调任务 | 进行中；Orca worker B 在独立工作树开发当前源码部署、升级和备份恢复脚本，合同沿用 docs/NEXT_AI_PROMPT.md | 脚本须保留配置/数据、健康检查、迁移备份与恢复；干净 Ubuntu 首装/升级/重启实测仍待完成 |
 | R15 | 评估风控时间/筛选与浏览器替换 | 用户指定 #99/#302 | 已完成代码层评估；#99 一期回归/必要局部修复，#302 二期试验为技术建议 | #99 现有筛选经查询提交，数据库时区和无时区序列化待实测；#302 不按“完美迁移”假设整体替换 |
+| R16 | 自用部署移除广告、远程官方内容、演示代码及第三方推广 | 2026-10-13 用户直接要求“清除这些广告，并且去除演示的代码”；补充“自己部署自用，所有第三方的都去除”，删除深度选“彻底删除” | 已实现待验证（未提交）；广告模块（展示/申请/审核/付费）、远程官方广告/公告/弹窗拉取、登录页底部广告、演示账号、作者群/赞赏二维码、返佣链接、上游更新检查已从 Web/后端/手机端/桌面启动器删除；Web tsc+vite build、移动 tsc、py_compile、静态结构检查通过 | 服务器重新构建部署后浏览器确认仪表盘/弹窗/登录页无广告；旧库 xy_advertisements 表及 auth.footer_ad_html/show_default_login_info 设置行保留未删（已无代码读取）；Python 全套因缺 SQLAlchemy 未运行 |
 
 
 状态统一使用：未开始 / 进行中 / 已实现待验证 / 已验证 / 阻塞。当前为保守交接核对，不是完整产品审计。
@@ -368,6 +369,7 @@
 - main / 8a60b7f（ahead 11），e2e2953 基线和三个原 Task/Dispatch 保留；A 无隔离 MySQL 按 fallback 交付 harness，B/C 原任务继续。自动审批仍有超时，不等于执行成功或明确拒绝；C 继续升级执行的 question 已回复并 ack。无 worker_done 或集成验证，OC02 仍进行中。
 - 本轮尚未新增业务验证/功能提交，主目录仅协作规则和交接文档改动；下一步处理实际 worker 结果并审查验证后集成 main。既有 Python 52/52、Node 下架 68/68、移动回执/tsc 为前一运行轮证据，未冒充本轮新结果。
 - 后续检查确认当前阻塞为自动审查响应延迟：主协调只读检查超时，一次重试仍超时；已有自动审查最终 allow 耗时 738.924 秒。用户的执行方式选择仍待回答；没有把任何超时命令记为通过，也未终止 worker、重复派发、集成、push 或部署。
+- 用户最新 R14 冲突指令（2026-09-30）：用户已在 Ubuntu 工作树写入 `scripts/deploy-ubuntu.sh`（7091 bytes）、`docs/UBUNTU_DEPLOY.md`、`tests/test_ubuntu_deploy.sh` 及初始 Docker/代理文件；活动终端 `term_14716dbd-a9d8-4610-b051-60b329907709` 与 worker B 共用该工作树，moving `docker/ubuntu-compose.yml` 下的静态测试失败。已向 `ctx_4cbeb2e79d87` 发送冻结指令并发送终端 interrupt：停止所有写入、patch、测试生成、暂存和提交，不覆盖/回滚/删除用户文件；后续只读核对，等待所有权/集成决定。moving compose 的失败不计验证通过。
 - 本轮最终收尾：B `ctx_2604c8b0648b` 已 `worker_done --outcome failed`，没有部署文件、测试或提交；A `ctx_ce4084de84fb` 已 `worker_done --outcome failed`，仅独立工作树留下未提交 `tests/test_mysql_queue_migrations.py`，两次 Python 回归因基础环境缺 SQLAlchemy 未进入业务断言，真实 MySQL/容器不可用；C `ctx_08415b6833c1` 已 `worker_done --outcome failed`，未改聊天源码，留下未提交 `docs/orca/chat-viewport.md` 与工作树 `PROJECT_STATE.md`，真实浏览器/Playwright、Vite/WS harness、截图、六组 Node 和 Web tsc 均未运行。三个 Dispatch 均未合并 main；B/A 已结算并保留外部工作树，C 已结算并保留外部工作树。
 - 续接记录：用户继续后旧 A/C 终端 retry 在 agent_readiness 超时，已核对无残余资源且无未处理 inbox；随后同一 C 工作树的新终端以 --approve-for-me 及原 Task 正式 retry 成功，`ctx_7fd92777116a` 正在执行。下一步消费新 Dispatch 的 question/escalation/worker_done，审查实际浏览器 evidence，再决定是否集成。新 attempt 尚无验证或功能提交，不将前一失败报告状态当作新完成证据。
 - C 报告确认的只读依赖 junction 位于其工作树 `frontend/node_modules`，目标为主目录既有依赖；未安装依赖、未修改目标。它可作为下一轮恢复线索，不能算浏览器验收。A 的 `tests/test_mysql_queue_migrations.py` 目前只在 worker 工作树，未纳入主目录或提交；其测试暴露当前 `ensure_queue_indexes` 入口尚未有已验证实现，不应直接合并为功能。
@@ -839,3 +841,56 @@
 - 恢复时读取本文件、`AGENTS.md`、`docs/ORCA_COORDINATOR_TASK.md`，核对 `main`、HEAD 和工作区后再决定是否创建 Orca Run。当前 Orca 可用版本为 `1.4.215`；本轮没有取得 Run/Task/Dispatch 会话 ID。主协调会话 ID 未由可用命令返回，恢复应以当前会话继续并重新查询 `orca status --json`，不要猜造 ID。
 
 - 审查进度更正：已读取协调任务与交接规范、核对 Git 并初步审阅必要 diff；完整基线审查、本轮业务验证与提交尚未完成。AGENTS.md 更新尝试因 apply_patch 错误未落盘；本轮未新增业务源码修改。
+
+
+### 2026-10-01：新会话全项目审查与 Orca 停点核对
+
+- 需求文档定位：仓库没有独立的 `xianyu-requirements-v0.5.md`；正式需求全文保存在本文“附录 B：需求确认稿 v0.5 原文”（约第 606 行），`outputs/PROJECT_STATE.md` 是副本。`docs/NEXT_AI_PROMPT.md` 仅为后续开发提示和验收边界。
+- 实际 Git：分支 `main`，HEAD `f4567477aa60b2b8d665e33f32bcd5edd75b1481`，相对 `origin/main` ahead 13；未 push。工作区有 `PROJECT_STATE.md` 1 行未提交修改，以及未跟踪 `.workbuddy/`、`outputs/`、`frontend/dist-publish-check/`，因此不能称为完全干净或“所有操作都已提交”。源码功能提交已在本地历史中，交接文档本轮修改未提交。
+- Orca：旧 Run `run_f7192cc83c24` 下三项 worker 和两个重试 Dispatch 均为 `failed`/`exited` 或 `unverifiable`，没有活动 worker；资源记录仍为 retained/external，未擅自删除工作树。当前可见还有主目录会话和独立 `sunstar` 终端；本轮未创建新 Run/Task/Dispatch。
+- 本轮验证：Node 离线回归（聊天加载、重连补拉、Android 聊天 26 场景、发送回执、移动存储竞态、Web/Android 下架交互 68 场景）全部通过；Web/Android `tsc --noEmit` 全部退出 0；Python 排程/库存/来源子集 11 项、1 项跳过通过。Python 全套当前环境未通过：49 项中 24 项因缺少 `loguru` 等依赖导入错误、16 项跳过，不能把历史 141/141 记录冒充本轮验证。
+- 需求结论：当前代码为“部分满足”。R01、R03 的发布/持久下架子集、R09、R13 的离线可靠性子集已有证据；R02、R04、R05、R06、R07、R08、R10、R11、R14、R15 仍需真实环境或功能补齐；R12 视频聊天继续阻塞。恢复接口仍未核验，库存耗尽下架/取消恢复、批量编辑含图片、擦亮、实体物流单号发货、MySQL 迁移/多 worker、Release APK/真机、浏览器/平台和 Ubuntu 源码部署均不能标记完成。
+- 下一步第一件事：准备隔离 Python 依赖和 MySQL/容器测试环境，先复跑 Python 全套并完成数据库迁移/并发验收；随后按需求缺口逐项补齐或明确平台协议/测试对象。不得把离线测试、代码存在或历史提交标题当作完整产品验收。
+
+### 2026-10-01：第一、第二、第四项开发轮集成停点
+
+- 用户授权主协调继续开发，并允许 worker 使用临时分支、Approve for me、最终合并 main；本轮创建 Run run_cf7c522ac3f3，三个 worker 实际生效上下文均为 managed workspace-write / approvals_reviewer=auto_review（worker 自报），未安装依赖、未部署、未操作真实平台。
+- 已合并到 main：Ubuntu 源码部署 commit b207d96；库存耗尽后显式 relist 操作与状态保护 commit 5a4fb19；持久批量编辑含图片/历史隔离/失败与未知保护、擦亮边界代码 commit 9b790a3；批量编辑模型注册、数据库建表和后端执行器接线 commit 635bd4d。当前 main 相对 origin/main ahead 17。
+- Ubuntu 静态契约测试 bash tests/test_ubuntu_deploy.sh 全部通过；库存纯策略 5 项通过；本地 py_compile 与 git diff --check 通过。完整 Python 依赖测试仍未执行：当前解释器缺少 SQLAlchemy 等依赖，未安装依赖。
+- 库存实现：新增 operation=relist 的明确任务路由/适配器，恢复只接受 offline_reason=inventory 且可用库存大于零；重试、unknown、状态版本和人工下架保护沿用；无已核验平台恢复协议时适配器 fail-closed，不猜 API、不假成功。
+- 批量编辑实现已接入后端生命周期和表初始化；源码支持不可变 payload snapshot、图片保留/替换校验、历史/来源待确认隔离、五档窗口、逐目标 lease、未知结果不重发和失败项新窗口重试；擦亮既有 scheduler 结果保护得到局部修正。Web/Android 新增 API wrapper，但真机/浏览器和真实平台尚未验证。
+- 实体物流仍阻塞：仓库没有已核验的闲鱼快递公司/单号提交协议。本轮未伪造 endpoint、未把卡券或无物流发货当实体物流；前端/平台提交和真实结果持久化待取得协议后实现。
+- 未提交文件仅为既有交接文档 PROJECT_STATE.md 及未跟踪 .workbuddy/、outputs/、frontend/dist-publish-check/；不纳入本轮代码提交。下一步先审查编辑/库存 commits 的共享接口和离线测试，再补实体物流协议接入或标记阻塞。
+
+### 2026-10-01：代码-only 收尾波次
+
+- 用户确认除 MySQL/容器验收和 APK/真机/浏览器运行环境外，继续在电脑上完成代码和离线测试，不安装软件、不部署、不操作真实平台。本轮 Run `run_873e5124b050` 派发三个 code-only worker，均使用 `--approve-for-me` 启动。
+- 已合并到本地 main：`5ec46bb` fail-closed 实体物流合同 schema/service/7 项测试；`15733e8` Web/Android 批量编辑入口、状态与图片编辑 API 接线；`896526d` 擦亮任务按商品来源隔离历史/来源待确认商品。当前 HEAD `896526d`，相对 origin/main ahead 3，尚未 push。
+- 物流合同只校验 owner/order/status/idempotency 和真实协议回执，明确禁止用卡券或无物流结果替代实体物流；仓库仍无已核验承运商/运单提交协议，因此真实物流提交继续阻塞。
+- 本轮验证：`py -3.13 -B -m unittest tests.test_physical_logistics_contract tests.test_inventory_policy -q` 12/12 通过；`git diff --check` 通过。Web/Android TypeScript 未执行成功：三个新工作树没有 `node_modules`，继续执行会触发安装，已按用户要求停止。完整 SQLAlchemy 测试仍因依赖缺失未执行。
+- 未提交文件：`PROJECT_STATE.md` 本记录修改及既有未跟踪 `.workbuddy/`、`outputs/`、`frontend/dist-publish-check/`；未纳入代码提交。下一步可在用户允许安装/准备依赖后运行完整类型和数据库回归，或继续等待物流协议，不在当前轮猜测平台接口。
+
+### 2026-10-01：Ubuntu 基础依赖引导脚本
+
+- 新增 scripts/bootstrap-ubuntu.sh：检查 Ubuntu/架构/权限，安装基础工具 ca-certificates curl gnupg lsb-release git openssl util-linux iproute2 gzip tar jq，安装并启用 Docker Engine、Buildx、Compose plugin，可用 --dry-run、--skip-docker、--no-group；脚本默认不启动业务容器、不生成应用凭据、不执行数据库迁移。
+- 新增 tests/test_ubuntu_bootstrap.sh，静态契约和 shell 语法测试全部通过。已提交 main：b6a2cf6。当前 main 比 origin/main ahead 4；本轮未 push。
+- 服务器使用顺序：先运行 sudo bash scripts/bootstrap-ubuntu.sh，重新登录使 docker 组权限生效，再运行 bash scripts/deploy-ubuntu.sh deploy。若不想加入 docker 组可传 --no-group，之后用 root 或 sudo 执行 Docker 命令。
+- 该脚本未在真实 Ubuntu 服务器执行；网络、APT、Docker 服务和磁盘要求仍需明天在服务器实测。
+### 2026-10-02：Ubuntu 引导脚本已推送
+
+- 已按用户要求执行 `git push origin main`，GitHub `main` 远程 HEAD 核对为 `b6a2cf65b8e466cdf3f6f1eab68dba349b4b566b`（短 SHA `b6a2cf6`）。
+- 本次推送包含 Ubuntu 基础依赖引导脚本及此前已提交代码；未提交的 `PROJECT_STATE.md`、`.workbuddy/`、`outputs/`、`frontend/dist-publish-check/` 未被推送。
+- 推送后本地状态仍为 `main...origin/main`，代码已同步；交接文档本条记录尚未提交，避免为状态记录制造提交循环。
+
+### 2026-10-13：移除广告、远程官方内容、演示代码与第三方推广（R16，未提交）
+
+- 来源：用户反馈部署后出现“系统公告”弹窗和仪表盘“推荐广告/文字广告”，要求自用清除广告并去除演示代码；随后明确“所有第三方的都去除”、删除深度“彻底删除”。广告实际来源是后端 `remote_content_service` 默认从上游 `xy.zhinianboke.com` 拉取广告/公告/弹窗并标“官方”合并展示。
+- 已删除：后端 `routes/advertisements.py`、`routes/qrcode.py`、`services/remote_content_service.py`、`common/models/advertisement.py`；公告/弹窗公告路由改为仅本站内容；`config.py` 删除 `REMOTE_OFFICIAL_BASE_URL`/`ENABLE_REMOTE_*`，`.env.example`、`deploy.sh`、`deploy_remote.sh`、`update.sh`、根 `docker-compose.yml` 同步删除这些变量（`common/core/config.py` 为 `extra="ignore"`，旧 env 残留不影响启动）；`init_database.py` 删除广告表建表/补字段/枚举迁移及 `auth.footer_ad_html`、`show_default_login_info` 默认设置；版本服务删除向上游 `xy-update` 检查更新，仅保留 `/version/current`。
+- Web：删除广告申请/管理/付费页、仪表盘广告模块、“官方”标记、登录/注册/忘记密码底部广告（改为中性版权行）、登录页“演示账号 admin/admin123 一键填充”及其设置开关、系统设置的底部广告卡/群二维码卡/广告费用卡、关于页群/公众号/Telegram/赞赏二维码与使用人数及检查更新、上游官网专属的获取激活码/续期/本地版/源码页、AI 设置 aff 返佣链接、作者 QQ/微信/充值链接及 xianyushop 推广提示（保留可配置的远程接口字段，默认值改为空）。弹窗公告菜单从“广告”分组移出，保留本地公告功能。关于页保留原作者与源码链接（AGPL-3.0 要求保留来源）。
+- 手机端：删除广告管理页与 wrapper、菜单/路由入口、`show_default_login_info` 设置项、上游 IP 示例与 xianyushop 占位。桌面启动器：删除远程广告仪表盘（默认改为服务状态页）、关于页远程二维码、“在线版本”链接和下载上游公众号图片作窗口图标；激活码与 exe 自动更新逻辑属于授权/更新功能，未改动。另删除根目录返佣快捷方式 `推荐云服务器CDN-www.hsykj.com.url`，README 删除网盘/交流群/赞赏/Star History 推广段。
+- 顺带修复（非本需求，阻塞验证）：`frontend/src/pages/items/BatchSellerItemEditModal.tsx` 自 `15733e8` 起正则 `/[\r\n,]+/` 被写成真实换行，导致 `tsc` 与 `npm run build`（前端 Docker 构建）失败；已改回转义写法。
+- 保留未动（功能性对接，需用户主动配置才生效）：分销卡券 `CARD_DOCK_BASE_URL`、yifan 充值对接、Token/协议登录/位置聊天远程接口、极验默认 key、高德地址联想、`captcha.py`/`RiskLogs.tsx` 的 Token 域名防误填校验、充值服务中 `order_type == 'ad'` 防误加余额分支、`promotion/` 子系统（未在 Ubuntu compose 中部署）。旧库 `xy_advertisements` 表与两条设置行不做删除（无代码读取，删除属于数据操作需另行授权）。
+- 验证（本机 `D:/Myproject/xianyu-auto-reply`）：Web `node frontend/node_modules/typescript/bin/tsc --noEmit -p frontend/tsconfig.json` 退出 0；`vite build` 输出到系统临时目录成功，产物 grep 无广告/返佣/上游官网/演示账号字符串，临时目录已删除；移动 `tsc --noEmit -p xianyu-mobile/tsconfig.json` 退出 0；改动 Python 文件 `py_compile` 通过；AST 静态检查确认 init 字面量完整、72 个路由模块均存在且已注册、无代码引用已删模块；`bash tests/test_ubuntu_deploy.sh` 通过；`git diff --check` 通过。未运行：Python 全套与 `tests.test_listing_actions`（当前解释器缺 SQLAlchemy，未安装依赖），浏览器/真机/服务器部署实测。
+- 提交边界：以上全部为工作区未暂存改动，未 commit/push；既有未跟踪 `.workbuddy/`、`outputs/`、`frontend/dist-publish-check/` 未触碰（其中旧构建产物仍含广告代码，不参与部署）。
+- 部署方式核对：根目录 `deploy.sh`、`deploy_remote.sh`、`update.sh` 使用上游预构建镜像 `registry.cn-shanghai.aliyuncs.com/zhinian-software/*:latest`，README 的 `curl ... xy-update.zhinianboke.com/... | bash` 也是拉上游脚本；用这些方式部署的服务器运行的是原作者镜像，本仓库改动不会生效。`scripts/deploy-ubuntu.sh`（`docker/ubuntu-compose.yml`）与根 `docker-compose.yml` 才从本仓库源码构建。另：HEAD 含上述正则缺陷，本修复前源码构建前端会在 `tsc` 失败，故用户当前服务器很可能运行的是上游镜像（未核实，未登录服务器）。
+- 下一步第一件事：确认用户服务器的部署方式；用户确认后提交并推送，服务器 `git pull` 后执行 `bash scripts/deploy-ubuntu.sh deploy` 从源码重新构建，浏览器确认登录页、仪表盘、顶部公告和弹窗均无广告。自用升级只用本仓库脚本，不再运行上游一键脚本或 `update.sh`。

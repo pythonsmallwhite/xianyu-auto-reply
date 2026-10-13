@@ -2002,17 +2002,6 @@ export function Accounts() {
           <h2 className="vben-card-title ">
             <Plus className="w-4 h-4" />
             添加新账号
-            <span className="ml-2 text-xs font-normal text-slate-500 dark:text-slate-400">
-              获取Cookie工具地址：
-              <a
-                href="https://github.com/zhinianboke/packet-capture-tool"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-blue-600 dark:text-blue-400 hover:underline break-all"
-              >
-                https://github.com/zhinianboke/packet-capture-tool
-              </a>
-            </span>
           </h2>
         </div>
         <div className="vben-card-body">
@@ -3713,17 +3702,6 @@ export function Accounts() {
                           {aiProviderType === 'anthropic' && '无需补全 /v1/messages'}
                           {aiProviderType === 'gemini' && '无需补全 /v1beta/models'}
                           {aiProviderType === 'dashscope_app' && '请填入完整的 .../apps/{app_id}/completion 地址'}
-                        </p>
-                        <p className="text-xs text-red-500 dark:text-red-400 mt-1">
-                          推荐AI：{' '}
-                          <a
-                            href="https://api.momentsofus.cn/sign-up?aff=dAM9"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="underline hover:text-red-600 dark:hover:text-red-300"
-                          >
-                            https://api.momentsofus.cn/sign-up?aff=dAM9
-                          </a>
                         </p>
                       </div>
                       <div className="input-group">

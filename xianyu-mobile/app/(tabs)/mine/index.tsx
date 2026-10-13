@@ -92,7 +92,6 @@ export default function MineScreen() {
         { label: '数据分析', icon: BarChart3, onPress: () => router.push('/(tabs)/mine/data-analysis') },
         { label: '风控日志', icon: Shield, onPress: () => router.push('/(tabs)/mine/risk-logs') },
         { label: '反馈', icon: MessageCircle, onPress: () => router.push('/(tabs)/mine/feedback') },
-        { label: '广告管理', icon: Megaphone, onPress: () => router.push('/(tabs)/mine/advertisements') },
       ],
     },
     {

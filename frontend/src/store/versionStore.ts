@@ -4,10 +4,10 @@
  * 功能：
  * 1. 统一缓存后端返回的系统版本号（唯一来源：GET /api/v1/version/current）
  * 2. 请求去重：多个组件（侧边栏、关于页）同时挂载时只发一次请求
- * 3. 提供 setCurrentVersion，供「检查更新」接口返回的 current_version 回写，保证各处显示一致
+ * 3. 提供 setCurrentVersion，供需要时直接写入版本号，保证各处显示一致
  *
  * 说明：版本号属于被动展示信息，获取失败时不弹 toast（避免离线环境反复打扰用户），
- * 界面上不显示版本号即可；用户主动点击「检查更新」时的失败提示由关于页负责。
+ * 界面上不显示版本号即可。
  */
 import { create } from 'zustand'
 import { getCurrentVersion } from '@/api/version'

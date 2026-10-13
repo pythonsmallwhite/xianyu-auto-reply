@@ -26,7 +26,6 @@ export default function MineStackLayout() {
       <Stack.Screen name="announcements" options={{ title: '公告' }} />
       <Stack.Screen name="data-analysis" options={{ title: '数据分析' }} />
       <Stack.Screen name="feedback" options={{ title: '反馈' }} />
-      <Stack.Screen name="advertisements" options={{ title: '广告管理' }} />
       <Stack.Screen name="distribution" options={{ title: '分销管理' }} />
       <Stack.Screen name="distribution-supply" options={{ title: '货源广场' }} />
       <Stack.Screen name="distribution-pickup" options={{ title: '分销卡券' }} />

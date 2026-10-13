@@ -81,7 +81,6 @@ const SETTING_DEFS: SettingDef[] = [
   // 基础设置
   { key: 'registration_enabled', label: '允许注册', type: 'switch', category: '基础设置' },
   { key: 'login_captcha_enabled', label: '登录验证码', type: 'switch', category: '基础设置' },
-  { key: 'show_default_login_info', label: '显示默认登录信息', type: 'switch', category: '基础设置' },
   { key: 'log.retention_days', label: '日志保留天数', type: 'input', category: '基础设置', numeric: true, placeholder: '如 30' },
   { key: 'account.face_verify_timeout_disable', label: '人脸验证超时自动禁用', type: 'switch', category: '基础设置' },
   {
@@ -116,7 +115,7 @@ const SETTING_DEFS: SettingDef[] = [
   { key: 'token.remote_url', label: '远程URL', type: 'input', category: 'Token获取方式', placeholder: '远程 Token 服务地址' },
   { key: 'token.remote_secret_key', label: '密钥', type: 'secret', category: 'Token获取方式', placeholder: '远程服务密钥' },
   // 密码登录远程配置（仅当 password_login.mode === 'protocol' 时展示）
-  { key: 'password_login.remote_url', label: '远程URL', type: 'input', category: '密码登录远程配置', placeholder: 'https://api.xianyushop.shop/api/external/invoke' },
+  { key: 'password_login.remote_url', label: '远程URL', type: 'input', category: '密码登录远程配置', placeholder: '远程接口地址' },
   { key: 'password_login.remote_secret_key', label: '秘钥', type: 'secret', category: '密码登录远程配置', placeholder: '远程服务密钥' },
   // 提现配置
   { key: 'withdraw.notify_email', label: '提现通知邮箱', type: 'input', category: '提现配置', placeholder: '接收提现通知的邮箱' },
@@ -167,7 +166,6 @@ const HIDEABLE_MENUS: { key: string; label: string }[] = [
   { key: 'personal-settings', label: '个人设置' },
   { key: 'tutorial', label: '使用教程' },
   { key: 'feedback', label: '意见反馈' },
-  { key: 'ad-apply', label: '广告申请' },
   { key: 'disclaimer', label: '免责声明' },
   { key: 'about', label: '关于' },
 ];

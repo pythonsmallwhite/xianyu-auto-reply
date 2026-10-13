@@ -2,8 +2,8 @@
  * 登录弹窗公告组件
  *
  * 功能：
- * 1. 用户每次登录后弹窗展示启用中的公告
- * 2. 样式参照仪表盘「文字广告」模块（标题可跳转 + 内容展示）
+ * 1. 用户每次登录后弹窗展示本站管理员启用中的公告
+ * 2. 标题可跳转 + 内容展示
  * 3. 同一登录会话内仅弹一次（sessionStorage 标记），重新登录后再次弹出
  * 4. 仅可通过「关闭」按钮关闭，禁止点击遮罩关闭
  */
@@ -82,7 +82,7 @@ export function PopupAnnouncementModal() {
               </button>
             </div>
 
-            {/* 公告列表（样式参照仪表盘「文字广告」模块） */}
+            {/* 公告列表（标题可跳转 + 内容展示） */}
             <div className="px-5 py-4 space-y-2 max-h-[60vh] overflow-y-auto">
               {items.map((item) => (
                 <div
@@ -97,17 +97,11 @@ export function PopupAnnouncementModal() {
                         rel="noopener noreferrer"
                         className="flex-1 text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
                       >
-                        {item.source === 'remote' && (
-                          <span className="flex-shrink-0 px-1.5 py-0.5 text-[10px] leading-none rounded bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-300">官方</span>
-                        )}
                         {item.title}
                         <ExternalLink className="w-3 h-3 flex-shrink-0" />
                       </a>
                     ) : (
                       <span className="flex-1 text-sm font-medium text-slate-900 dark:text-slate-100 flex items-center gap-1">
-                        {item.source === 'remote' && (
-                          <span className="flex-shrink-0 px-1.5 py-0.5 text-[10px] leading-none rounded bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-300">官方</span>
-                        )}
                         {item.title}
                       </span>
                     )}

@@ -2,10 +2,9 @@ import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { MessageSquare, User, Lock, Mail, KeyRound, Eye, EyeOff } from 'lucide-react'
-import { AuthNavbar } from '@/components/common/AuthNavbar'
-import { SafeHtml } from '@/components/common/SafeHtml'
-import { getDefaultAuthFooterAdSettings, getDefaultLoginBrandingSettings } from '@/api/settings'
-import { login, verifyToken, getRegistrationStatus, getLoginInfoStatus, generateCaptcha, verifyCaptcha, sendVerificationCode, getLoginCaptchaStatus, getLoginBrandingSettings, getAuthFooterAdSettings } from '@/api/auth'
+import { AuthNavbar, PublicPageFooter } from '@/components/common/AuthNavbar'
+import { getDefaultLoginBrandingSettings } from '@/api/settings'
+import { login, verifyToken, getRegistrationStatus, generateCaptcha, verifyCaptcha, sendVerificationCode, getLoginCaptchaStatus, getLoginBrandingSettings } from '@/api/auth'
 import { useAuthStore } from '@/store/authStore'
 import { useUIStore } from '@/store/uiStore'
 import { cn } from '@/utils/cn'
@@ -24,10 +23,8 @@ export function Login() {
   const [loading, setLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [registrationEnabled, setRegistrationEnabled] = useState(true)
-  const [showDefaultLogin, setShowDefaultLogin] = useState(true)
   const [loginCaptchaEnabled, setLoginCaptchaEnabled] = useState<boolean | null>(null)
   const [loginBranding, setLoginBranding] = useState(() => getDefaultLoginBrandingSettings())
-  const [authFooterAd, setAuthFooterAd] = useState(() => getDefaultAuthFooterAdSettings())
 
   // Form states
   const [username, setUsername] = useState('')
@@ -82,20 +79,12 @@ export function Login() {
       .then((result) => setRegistrationEnabled(result.enabled))
       .catch(() => {})
 
-    getLoginInfoStatus()
-      .then((result) => setShowDefaultLogin(result.enabled))
-      .catch(() => {})
-
     getLoginCaptchaStatus()
       .then((result) => setLoginCaptchaEnabled(result.enabled))
       .catch(() => {})
 
     getLoginBrandingSettings()
       .then((result) => setLoginBranding(result))
-      .catch(() => {})
-
-    getAuthFooterAdSettings()
-      .then((result) => setAuthFooterAd(result))
       .catch(() => {})
   }, [])
 
@@ -273,12 +262,6 @@ export function Login() {
     } finally {
       setLoading(false)
     }
-  }
-
-  const fillDefaultCredentials = () => {
-    setLoginType('username')
-    setUsername('admin')
-    setPassword('admin123')
   }
 
   return (
@@ -565,31 +548,10 @@ export function Login() {
               )}
             </div>
 
-            {/* Default credentials */}
-            {showDefaultLogin && (
-              <div className="mt-6 pt-6 border-t border-slate-100 dark:border-slate-700">
-                <button
-                  type="button"
-                  onClick={fillDefaultCredentials}
-                  className="w-full flex items-center justify-between p-3 rounded-md 
-                             bg-slate-50 dark:bg-slate-700/50 hover:bg-slate-100 dark:hover:bg-slate-700 
-                             transition-colors text-sm"
-                >
-                  <div className="text-left">
-                    <p className="text-slate-500 dark:text-slate-400">演示账号</p>
-                    <p className="text-slate-900 dark:text-white font-medium">admin / admin123</p>
-                  </div>
-                  <span className="text-blue-600 dark:text-blue-400">一键填充 →</span>
-                </button>
-              </div>
-            )}
           </div>
 
           {/* Footer */}
-          <SafeHtml
-            html={authFooterAd['auth.footer_ad_html']}
-            className="mt-6 text-center text-xs text-slate-400 dark:text-slate-500"
-          />
+          <PublicPageFooter systemName={loginBranding['login.system_name']} />
         </motion.div>
       </div>
       </div>

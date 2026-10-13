@@ -24,7 +24,6 @@ from launcher.version import CURRENT_VERSION
 
 # 左侧导航菜单项定义：(标识key, 显示文字)
 _NAV_ITEMS = [
-    ("dashboard", "仪表盘"),
     ("status", "服务状态"),
     ("log_backend-web", "Backend 日志"),
     ("log_websocket", "WebSocket 日志"),
@@ -52,7 +51,7 @@ def show_running_page(app, start_results: dict):
     app._clear_page()
     app._current_page = "running"
     app._start_results = start_results
-    app._active_sub_page = "dashboard"
+    app._active_sub_page = "status"
     app._nav_labels = {}
 
     outer = tk.Frame(app.root, bg=COLORS["bg"])
@@ -80,8 +79,8 @@ def show_running_page(app, start_results: dict):
     content_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
     app._content_frame = content_frame
 
-    # 默认显示仪表盘
-    _switch_page(app, "dashboard")
+    # 默认显示服务状态
+    _switch_page(app, "status")
 
     # 启动状态定时刷新
     _auto_refresh(app)
@@ -136,10 +135,7 @@ def _switch_page(app, nav_key: str):
     for w in app._content_frame.winfo_children():
         w.destroy()
 
-    if nav_key == "dashboard":
-        from launcher.gui_dashboard import render_dashboard_page
-        render_dashboard_page(app)
-    elif nav_key == "status":
+    if nav_key == "status":
         _render_status_content(app)
     elif nav_key == "renew":
         from launcher.gui_renew import render_renew_page
@@ -261,17 +257,6 @@ def _render_status_content(app):
                        ("定时任务", "127.0.0.1:8091")]:
         tk.Label(url_frame, text=f"{name}：http://{addr}", font=("Consolas", 9),
                  fg=COLORS["text_secondary"], bg=COLORS["card_bg"]).pack(anchor=tk.W, pady=1)
-
-    # 在线版本提示
-    online_frame = tk.Frame(inner, bg="#EFF6FF", padx=12, pady=8)
-    online_frame.pack(fill=tk.X, padx=20, pady=(8, 0))
-    tk.Label(online_frame, text="🌐 在线版本：", font=("微软雅黑", 10),
-             fg=COLORS["text"], bg="#EFF6FF").pack(side=tk.LEFT)
-    online_url = "https://xy.zhinianboke.com"
-    online_lbl = tk.Label(online_frame, text=online_url, font=("Consolas", 10, "underline"),
-                          fg=COLORS["primary"], bg="#EFF6FF", cursor="hand2")
-    online_lbl.pack(side=tk.LEFT)
-    online_lbl.bind("<Button-1>", lambda e: __import__("webbrowser").open(online_url))
 
     # 分隔线
     tk.Frame(inner, bg=COLORS["border"], height=1).pack(fill=tk.X, padx=20, pady=8)

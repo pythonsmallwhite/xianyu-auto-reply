@@ -90,8 +90,7 @@ export default function BatchSellerItemEditModal({ items, onClose, onCreated }: 
       patch.price = value
     }
     if (images.trim()) {
-      const urls = images.split(/[
-,]+/).map((value) => value.trim()).filter(Boolean)
+      const urls = images.split(/[\r\n,]+/).map((value) => value.trim()).filter(Boolean)
       if (!urls.length || urls.length > 9) return addToast({ type: 'warning', message: '图片地址需为1至9个非空地址' })
       patch.images = urls
     }

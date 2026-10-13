@@ -76,7 +76,6 @@ NON_ADMIN_ALLOWED_KEYS = {
     "login.system_name",
     "login.system_title",
     "login.system_description",
-    "auth.footer_ad_html",
     "theme.effect",
     "theme.color_preset",
     "theme.font_family",
@@ -267,12 +266,10 @@ async def get_public_settings(
     # 只返回公开的配置项
     public_keys = {
         "registration_enabled",
-        "show_default_login_info",
         "login_captcha_enabled",
         "login.system_name",
         "login.system_title",
         "login.system_description",
-        "auth.footer_ad_html",
         "theme.effect",
         "theme.color_preset",
         "theme.font_family",

@@ -202,6 +202,5 @@ export async function uploadFeedbackImage(uri: string): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// 广告相关 API 已迁移至 ./advertisements（含图片上传 / 编辑 / 付款等完整流程）。
 // 本文件仅保留用户反馈相关接口。
 
