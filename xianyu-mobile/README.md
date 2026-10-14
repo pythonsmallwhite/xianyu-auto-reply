@@ -1,6 +1,6 @@
 # 闲鱼管家 移动端 (xianyu-mobile)
 
-> 闲鱼自动回复管理系统的 Android 客户端，基于 Expo + React Native 构建，与 [xianyu-auto-reply](../README.md) 后端完全解耦，用户自托管服务器即可使用。
+> 闲鱼管理系统的 Android 客户端，基于 Expo + React Native 构建，与 [xianyu-auto-reply](../README.md) 后端完全解耦，用户自托管服务器即可使用。
 
 ## 功能概览
 
