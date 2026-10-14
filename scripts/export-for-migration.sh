@@ -14,6 +14,8 @@ OUT_ROOT="${OUT_ROOT:-${ROOT_DIR}/migration-export}"
 APP_SERVICES=(backend-web websocket scheduler frontend)
 STOP=0
 STOPPED=0
+# 旧版 deploy.sh 固定使用此 compose 项目名（与目录名无关）
+export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-xianyu-auto-reply}"
 
 log(){ printf '[export] %s\n' "$*"; }
 die(){ printf '[export] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -29,7 +31,8 @@ case "${1:-}" in
 esac
 
 cd "$ROOT_DIR"
-mysql_cid="$(compose ps -q mysql 2>/dev/null | head -1 || true)"
+mysql_cid=""
+if [[ -f "$COMPOSE_FILE" ]]; then mysql_cid="$(compose ps -q mysql 2>/dev/null | head -1 || true)"; fi
 [[ -n "$mysql_cid" ]] || mysql_cid="$(docker ps -q --filter name='^xianyu-mysql$' | head -1)"
 [[ -n "$mysql_cid" ]] || die "running MySQL container not found (expected xianyu-mysql)"
 db="$(docker exec "$mysql_cid" sh -c 'printf %s "$MYSQL_DATABASE"')"
@@ -75,6 +78,9 @@ tar -C "$OUT_ROOT" -czf "${OUT_ROOT}/${name}.tar.gz" "$name"
 rm -rf "$out"
 bundle="${OUT_ROOT}/${name}.tar.gz"
 log "export bundle: $bundle ($(du -h "$bundle" | cut -f1))"
+# 供根目录 deploy.sh 自动迁移时读取导出路径
+if [[ -n "${EXPORT_PATH_FILE:-}" ]]; then printf '%s\n' "$bundle" > "$EXPORT_PATH_FILE"; fi
+if [[ -n "${EXPORT_QUIET:-}" ]]; then exit 0; fi
 cat <<EOF
 
 下一步：重装前把文件下载到本地（在你自己的电脑上执行）：

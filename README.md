@@ -8,21 +8,24 @@
 
 ## 本 fork 部署（Ubuntu 24.04，从源码构建）
 
-下文“一键部署”章节的 `curl ... | bash` 与根目录 `deploy.sh`/`update.sh` 使用原作者预构建镜像，不包含本 fork 的改动。本 fork 请用：
+本仓库只从源码构建镜像，**不拉取原作者预构建镜像**（那些镜像带广告和远程“官方”内容）。
 
 ```bash
-# 新服务器（root）
+# 首次（root）
 apt-get update && apt-get install -y git
 git clone https://github.com/pythonsmallwhite/xianyu-auto-reply.git /opt/xianyu-auto-reply
 cd /opt/xianyu-auto-reply
-bash scripts/install-ubuntu.sh --port 80          # 安装 Docker、生成密码、构建镜像并启动
+bash deploy.sh                    # 安装 Docker、生成随机密码、构建镜像并启动（默认端口 80，可加 --port / --public-url）
 
 # 更新
-git pull && bash scripts/deploy-ubuntu.sh update   # 失败自动回滚到上一个成功版本
-bash scripts/deploy-ubuntu.sh status | logs | rollback | backup
+git pull && bash deploy.sh        # 失败自动回滚到上一个成功版本
+bash deploy.sh status | logs | rollback | backup
 ```
 
-从旧服务器（`deploy.sh` 部署）迁移：先在旧服务器执行 `bash scripts/export-for-migration.sh` 并把生成的 `migration-export/xianyu-export-*.tar.gz` 下载到本地，重装后上传，用 `bash scripts/install-ubuntu.sh --port 80 --import <文件>` 导入。配置与密码在 `.ubuntu-deploy/.env`（仅 root 可读）。
+- **同一台服务器上已有旧版部署**（原 `deploy.sh` 拉取的原作者镜像，容器名 `xianyu-*`）：直接 `bash deploy.sh` 会自动迁移——旧站点运行期间先构建新镜像，再停用旧版并导出其数据，新版导入数据后启动；任一步失败自动恢复旧版。旧数据目录 `xianyu_auto_reply/` 与旧镜像不会被删除。
+- **换服务器 / 重装系统**：在旧服务器执行 `bash scripts/export-for-migration.sh`，把 `migration-export/xianyu-export-*.tar.gz` 下载到本地；新服务器上传后执行 `bash deploy.sh --import <文件>`。
+- **旧服务器是 CentOS 7 且不打算重装**：`bash deploy.sh` 会调用 `scripts/update-server.sh`，在原部署上换成本仓库构建的镜像。
+- 配置与密码保存在 `.ubuntu-deploy/.env`（仅 root 可读）；云服务器安全组需放行对外端口。
 
 ---
 
@@ -117,9 +120,8 @@ xianyu-auto-reply/
 ├── scripts/              # CI/CD 与工具脚本
 ├── docker/frontend/      # 前端 Dockerfile 与 Nginx 配置
 ├── docker-compose.yml    # 本地源码构建编排
-├── deploy.sh             # 一键部署脚本（自动生成远程镜像版 compose）
-├── deploy_remote.sh      # 远程 MySQL/Redis 一键部署脚本（自动生成 docker-compose.remote.yml）
-├── update.sh             # 一键更新脚本（拉取最新远程镜像）
+├── deploy.sh             # 服务器部署/更新入口（从本仓库源码构建，自动迁移旧版部署）
+├── update.sh             # 等同 bash deploy.sh update
 ├── build.sh              # 本地源码全量构建脚本
 ├── build_frontend.sh     # 单独构建并重启 Frontend
 ├── build_backend_web.sh  # 单独构建并重启 Backend-Web
@@ -155,71 +157,11 @@ xianyu-auto-reply/
 
 ## 快速开始
 
-### 方式一：服务器一键部署（推荐）
+### 方式一：服务器部署（推荐）
 
-服务器已安装 Docker 与 Docker Compose 后，直接执行一键部署脚本即可：
+见文首“本 fork 部署”：`bash deploy.sh`。原作者的 `curl ... | bash` 一键脚本和远程 MySQL/Redis 部署方式已移除。
 
-```bash
-curl -fsSL https://xy-update.zhinianboke.com/deploy.sh | sed 's/\r$//' | bash
-```
-
-该脚本会自动完成部署所需的配置生成、镜像拉取、旧容器清理与服务启动。
-
-更新版本，直接执行一键更新脚本即可：
-
-```bash
-curl -fsSL https://xy-update.zhinianboke.com/update.sh | sed 's/\r$//' | bash
-```
-
-### 方式二：克隆仓库部署
-
-```bash
-git clone https://github.com/zhinianboke/xianyu-auto-reply.git
-cd xianyu-auto-reply
-bash deploy.sh
-```
-
-- 首次运行会自动生成 `.env` 配置文件和 `docker-compose.deploy.yml`
-- 从阿里云镜像仓库拉取预构建镜像并启动
-- 如果检测到加密版容器会自动清理（保留数据卷）
-- 部署完成后默认访问地址：
-  - 前端：`http://服务器IP:9000`
-  - API 文档：`http://服务器IP:8089/docs`
-  - 默认账号：`admin` / `admin123`
-
-后续更新：
-
-```bash
-bash update.sh
-```
-
-### 方式三：使用远程 MySQL / Redis 部署
-
-当 MySQL 和 Redis 由外部（如云数据库 RDS、独立服务器或已有实例）提供时，可使用 `deploy_remote.sh`。
-该脚本**不内置 mysql/redis 容器**，仅拉取并启动 4 个应用服务（frontend / backend-web / websocket / scheduler），
-数据库连接信息通过 `.env.remote` 配置。与方式一相同，直接远程拉取脚本执行即可：
-
-```bash
-# 1) 首次运行：自动生成 .env.remote 后退出，提示填写远程连接信息
-curl -fsSL https://xy-update.zhinianboke.com/deploy_remote.sh | sed 's/\r$//' | bash
-
-# 2) 编辑 .env.remote，填写真实的远程地址（勿填 localhost）
-#    MYSQL_HOST / REDIS_HOST 等
-vim .env.remote
-
-# 3) 再次运行：校验配置 → 自动生成 docker-compose.remote.yml → 拉取镜像 → 启动
-curl -fsSL https://xy-update.zhinianboke.com/deploy_remote.sh | sed 's/\r$//' | bash
-```
-
-> 已克隆仓库的也可改用本地脚本：`bash deploy_remote.sh`（首次生成配置后退出，填好 `.env.remote` 再次执行）。
-
-- 首次运行自动生成 `.env.remote`，每次运行自动生成 `docker-compose.remote.yml`，均不影响根目录原有的 `.env` / `docker-compose.yml` / `docker-compose.deploy.yml`
-- 容器名与主套保持一致（`xianyu-backend-web` / `xianyu-websocket` / `xianyu-scheduler` / `xianyu-frontend`），与方式二/方式四属于同一套部署，二者只需选其一，不要同时启动
-- 远程 MySQL 需提前创建好数据库（默认 `xianyu_data`）并授权部署机 IP 远程访问，应用启动时会自动建表与补齐字段
-- 建议远程 MySQL 持久设置 `max_connect_errors=100000`；若出现错误码 1129，需在数据库服务器执行 `FLUSH HOSTS` 解除主机封锁
-- 若远程库/缓存就在宿主机上，请使用 `host.docker.internal` 或宿主机内网 IP，**不要填 `localhost` / `127.0.0.1`**
-
-### 方式四：本地源码 Docker 构建
+### 方式四：本地源码 Docker 构建（开发调试用，使用根目录 docker-compose.yml）
 
 ```bash
 bash build.sh rebuild
@@ -382,9 +324,9 @@ npm run dev
 
 | 脚本 | 平台 | 作用 |
 |------|------|------|
-| `deploy.sh` | Linux | 生成远程镜像版 compose 并拉取镜像启动（首次部署） |
-| `deploy_remote.sh` | Linux | 使用远程 MySQL/Redis 部署，生成 `docker-compose.remote.yml` 与 `.env.remote` 并启动应用服务 |
-| `update.sh` | Linux | 拉取最新远程镜像并重建应用容器（后续更新） |
+| `deploy.sh` | Linux | 首次部署 / 更新：从本仓库源码构建镜像，Ubuntu 上自动迁移旧版部署，失败自动回滚 |
+| `update.sh` | Linux | 等同 `bash deploy.sh update` |
+| `scripts/export-for-migration.sh` | Linux | 换服务器前导出数据库、上传文件与浏览器数据 |
 | `build.sh` | Linux | 从源码全量构建所有 Docker 镜像并启动 |
 | `build_frontend.sh` | Linux | 单独重建并重启 Frontend 服务 |
 | `build_backend_web.sh` | Linux | 单独重建并重启 Backend-Web 服务 |
@@ -425,19 +367,16 @@ Docker 环境依赖各服务 Dockerfile 内已安装的浏览器。
 
 ### Docker 部署端口冲突？
 
-修改根目录 `.env` 中的端口配置后重新部署。
+首次部署用 `bash deploy.sh --port <端口>`；已部署后修改 `.ubuntu-deploy/.env` 中的 `PUBLIC_HTTP_PORT` 再执行 `bash deploy.sh`。
 
 ### 执行脚本报 `/bin/bash^M: 坏的解释器`？
 
 脚本文件包含 Windows 换行符（CRLF），Linux 无法识别。解决方法：
 
 ```bash
-# 方法一：用 sed 去除 \r 后执行
+# 用 sed 去除 \r 后执行（仓库已用 .gitattributes 强制 .sh 为 LF，正常 git clone 不会出现）
 sed -i 's/\r$//' deploy.sh
 bash deploy.sh
-
-# 方法二：通过管道执行（推荐远程脚本使用）
-curl -fsSL https://xy-update.zhinianboke.com/deploy.sh | sed 's/\r$//' | bash
 ```
 
 ## 许可证

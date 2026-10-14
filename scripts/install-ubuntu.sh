@@ -16,6 +16,7 @@ IMPORT=""
 PIP_INDEX="https://mirrors.cloud.tencent.com/pypi/simple"
 SWAP=1
 REGISTRY_MIRROR=1
+BUILD_ONLY=0
 TMP_DIR=""
 
 log(){ printf '[install-ubuntu] %s\n' "$*"; }
@@ -34,6 +35,7 @@ Usage: sudo bash scripts/install-ubuntu.sh [options]
   --pip-index URL    PyPI mirror for image builds (default: Tencent Cloud mirror)
   --no-swap          Do not create a swap file on small-memory servers
   --no-registry-mirror  Do not configure Docker Hub mirrors
+  --build-only       Install dependencies and build images, but do not start anything
   -h, --help         Show this help
 
 Options --port/--public-url/--pip-index only apply on the first install; afterwards
@@ -49,6 +51,7 @@ parse_args(){
       --pip-index) PIP_INDEX="${2:-}"; shift ;;
       --no-swap) SWAP=0 ;;
       --no-registry-mirror) REGISTRY_MIRROR=0 ;;
+      --build-only) BUILD_ONLY=1 ;;
       -h|--help) usage; exit 0 ;;
       *) usage >&2; die "unknown option: $1" ;;
     esac
@@ -64,8 +67,11 @@ check_os(){
   source /etc/os-release
   [[ "${ID:-}" == ubuntu ]] || die "Ubuntu is required (found ${ID:-unknown})"
   if [[ "${VERSION_ID:-}" != 24.04 ]]; then log "WARNING: tested for Ubuntu 24.04, found ${VERSION_ID:-unknown}; continuing"; fi
-  local free_kb; free_kb="$(df -Pk "$ROOT_DIR" | awk 'NR==2{print $4}')"
-  [[ "$free_kb" =~ ^[0-9]+$ && "$free_kb" -ge 15728640 ]] || die "at least 15 GiB free disk is required (images + build cache + data)"
+  # 首次需要 15GB（镜像 + 构建缓存 + 数据）；镜像已构建过（.env 已生成）时与 deploy-ubuntu.sh 一致要求 10GB
+  local free_kb need_gb=15
+  if [[ -f "$ENV_FILE" ]]; then need_gb=10; fi
+  free_kb="$(df -Pk "$ROOT_DIR" | awk 'NR==2{print $4}')"
+  [[ "$free_kb" =~ ^[0-9]+$ && "$free_kb" -ge $((need_gb * 1048576)) ]] || die "at least ${need_gb} GiB free disk is required"
 }
 # 小内存服务器构建三个 Python 镜像时容易内存不足：内存 < 4GB 且无 swap 时创建 2GB swap
 ensure_swap(){
@@ -133,6 +139,12 @@ main(){
   prepare_import
   if [[ -f "$ENV_FILE" ]]; then
     log "existing configuration $ENV_FILE is kept; --port/--public-url/--pip-index are ignored"
+  fi
+  if (( BUILD_ONLY )); then
+    log "building images only (first build takes 20-40 minutes); no service is started or stopped"
+    XY_PUBLIC_HTTP_PORT="$PORT" XY_PUBLIC_URL="$PUBLIC_URL" XY_PIP_INDEX_URL="$PIP_INDEX" \
+      bash "$ROOT_DIR/scripts/deploy-ubuntu.sh" build
+    return 0
   fi
   log "building images and starting services (first build takes 20-40 minutes)"
   XY_PUBLIC_HTTP_PORT="$PORT" XY_PUBLIC_URL="$PUBLIC_URL" XY_PIP_INDEX_URL="$PIP_INDEX" IMPORT_DIR="$IMPORT_DIR" \

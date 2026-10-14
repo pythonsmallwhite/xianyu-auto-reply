@@ -91,8 +91,16 @@ check "successful import writes bundle marker" test -s "$tmp/state/imported-data
 out="$(STUB_TABLES=105 IMPORT_DIR="$tmp/import" run_deploy_fn 'import_database && echo SKIPPED_OK')"
 check "rerun with the same bundle skips import even though tables exist" bash -c "printf '%s' '$out' | grep -q 'already imported' && printf '%s' '$out' | grep -q SKIPPED_OK && ! grep -q 'exec mysql -uroot' '$tmp/log'"
 mkdir -p "$tmp/import2"; printf 'different' | gzip -c > "$tmp/import2/database.sql.gz"
+: > "$tmp/log"
 out="$(STUB_TABLES=105 IMPORT_DIR="$tmp/import2" run_deploy_fn 'import_database && echo IMPORTED')"
-check "a different bundle into a non-empty database is still refused" bash -c "printf '%s' '$out' | grep -q 'already has 105 tables' && ! printf '%s' '$out' | grep -q IMPORTED"
+check "different bundle after an import that never deployed: database recreated, then imported" bash -c "printf '%s' '$out' | grep -q 'recreating database' && printf '%s' '$out' | grep -q IMPORTED && grep -q 'DROP DATABASE' '$tmp/log'"
+date > "$tmp/state/deployed.ok"
+mkdir -p "$tmp/import3"; printf 'third' | gzip -c > "$tmp/import3/database.sql.gz"
+: > "$tmp/log"
+out="$(STUB_TABLES=105 IMPORT_DIR="$tmp/import3" run_deploy_fn 'import_database && echo IMPORTED')"
+check "after a successful deployment any other import into a non-empty database is refused" bash -c "printf '%s' '$out' | grep -q 'already has 105 tables' && ! printf '%s' '$out' | grep -q IMPORTED && ! grep -q 'DROP DATABASE' '$tmp/log'"
+check "deploy writes deployed.ok only after mark_stable" order '  mark_stable' 'date -u +%Y-%m-%dT%H:%M:%SZ > "$DEPLOYED_MARKER_FILE"' "$DEPLOY"
+check "deploy-ubuntu has build-only command that starts nothing" bash -c "grep -q 'build) build_only;;' '$DEPLOY' && ! awk '/^build_only\\(\\)/,/^}/' '$DEPLOY' | grep -Eq 'compose (up|stop|run)'"
 
 if (( failures )); then printf '%d check(s) failed\n' "$failures"; exit 1; fi
 echo "all ubuntu install checks passed"

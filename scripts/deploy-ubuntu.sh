@@ -101,6 +101,8 @@ verify_health(){
 # 首次部署导入旧服务器数据（scripts/export-for-migration.sh 导出）；只允许导入到空数据库。
 # 导入成功后记录数据包校验值：首装中途失败后用同一个数据包重跑会跳过导入，不会重复导入或误拒绝。
 IMPORT_MARKER_FILE="${STATE_DIR}/imported-database.sha256"
+# 至少成功部署过一次的标记（之后库里可能有新业务数据，任何导入都必须拒绝）
+DEPLOYED_MARKER_FILE="${STATE_DIR}/deployed.ok"
 import_database(){
   [[ -n "$IMPORT_DIR" ]] || return 0
   [[ -f "$IMPORT_DIR/database.sql.gz" ]] || die "IMPORT_DIR must contain database.sql.gz"
@@ -114,7 +116,15 @@ import_database(){
   tables="$(compose exec -T mysql sh -c 'mysql -N -uroot -p"$MYSQL_ROOT_PASSWORD" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '"'"'$MYSQL_DATABASE'"'"'"' 2>/dev/null | tr -dc '0-9')" || true
   [[ "$tables" =~ ^[0-9]+$ ]] || die "cannot inspect target database before import"
   if (( tables > 0 )); then
-    die "target database already has $tables tables; import is only for a fresh install (use 'restore' for backups made by this script)"
+    # 上一次首装导入过、但从未部署成功：库里只有那次导入的数据，没有被使用过，可以重建后导入新数据包
+    if [[ -f "$IMPORT_MARKER_FILE" && ! -f "$DEPLOYED_MARKER_FILE" ]]; then
+      log "previous first-install import never completed a deployment; recreating database before importing"
+      # shellcheck disable=SC2016
+      compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "DROP DATABASE \`$MYSQL_DATABASE\`; CREATE DATABASE \`$MYSQL_DATABASE\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"' 2>/dev/null \
+        || die "cannot recreate database before import"
+    else
+      die "target database already has $tables tables; import is only for a fresh install (use 'restore' for backups made by this script)"
+    fi
   fi
   log "importing database from $IMPORT_DIR/database.sql.gz"
   gzip -dc "$IMPORT_DIR/database.sql.gz" | compose exec -T mysql sh -c 'exec mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'
@@ -191,16 +201,25 @@ deploy(){
     fail_or_rollback "new version did not become healthy"
   fi
   mark_stable
+  date -u +%Y-%m-%dT%H:%M:%SZ > "$DEPLOYED_MARKER_FILE"
   compose ps
   log "deployment finished: release $(env_value RELEASE_VERSION), http://<server-ip>:$(env_value PUBLIC_HTTP_PORT)/"
 }
 SNAPSHOT=""
+# 只构建镜像、不启动/不停止任何服务（迁移时先在旧站点运行期间完成耗时的构建）
+build_only(){
+  exec 9>"$LOCK_FILE"; flock -n 9 || die "another deployment, backup or restore is running"
+  check_platform; check_env; compose config --quiet
+  build_images
+  log "images built; no service was started or stopped"
+}
 status(){ check_platform; check_prereqs; check_env; compose ps; }
 logs(){ compose logs --tail="${LOG_LINES:-200}" -f; }
 main(){
   local command="${1:-deploy}"; mkdir -p "$STATE_DIR"; write_env
   case "$command" in
     deploy|update) deploy;;
+    build) build_only;;
     status) status;;
     logs) logs;;
     stop) compose stop;;
@@ -208,7 +227,7 @@ main(){
     backup) exec 9>"$LOCK_FILE"; flock -n 9 || die "another deployment, backup or restore is running"; check_platform; check_prereqs; check_env; backup "${2:-}";;
     restore) check_platform; check_prereqs; check_env; restore "${2:-}";;
     rollback) rollback;;
-    *) printf 'usage: %s [deploy|update|status|logs|stop|restart|backup [dir]|restore <dir>|rollback]\n' "$0" >&2; return 2;;
+    *) printf 'usage: %s [deploy|update|build|status|logs|stop|restart|backup [dir]|restore <dir>|rollback]\n' "$0" >&2; return 2;;
   esac
 }
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi
