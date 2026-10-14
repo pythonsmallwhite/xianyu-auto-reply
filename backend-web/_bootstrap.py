@@ -29,7 +29,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
 from common.db.error_messages import get_public_database_error_message
-from common.db.redis_client import close_redis_client, initialize_redis_client
+from common.db.redis_client import close_redis_client, get_redis_client
 from common.utils.logging_utils import setup_logging
 from common.utils.network_utils import resolve_listen_host
 
@@ -81,7 +81,7 @@ async def lifespan(app: FastAPI):
 
     # 初始化 Redis 健康连接池；失败时按指数退避重试，最终失败则停止启动。
     try:
-        await initialize_redis_client()
+        await get_redis_client()
     except Exception:
         logger.exception("Redis连接初始化失败，服务退出")
         raise
