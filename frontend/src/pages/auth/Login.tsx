@@ -190,16 +190,13 @@ export function Login() {
                 </button>
               </form>
 
-              <div className="flex items-center justify-between mt-6 text-sm">
-                <Link to="/forgot-password" className="text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-blue-400">
-                  忘记密码?
-                </Link>
-                {registrationEnabled && (
+              {registrationEnabled && (
+                <div className="mt-6 text-sm text-center">
                   <Link to="/register" className="text-blue-600 dark:text-blue-400 font-medium hover:text-blue-700 dark:hover:text-blue-300">
                     立即注册
                   </Link>
-                )}
-              </div>
+                </div>
+              )}
             </div>
 
             <PublicPageFooter systemName={loginBranding['login.system_name']} />
