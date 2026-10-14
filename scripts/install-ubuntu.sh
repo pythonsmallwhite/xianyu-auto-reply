@@ -67,9 +67,12 @@ check_os(){
   source /etc/os-release
   [[ "${ID:-}" == ubuntu ]] || die "Ubuntu is required (found ${ID:-unknown})"
   if [[ "${VERSION_ID:-}" != 24.04 ]]; then log "WARNING: tested for Ubuntu 24.04, found ${VERSION_ID:-unknown}; continuing"; fi
-  # 首次需要 15GB（镜像 + 构建缓存 + 数据）；镜像已构建过（.env 已生成）时与 deploy-ubuntu.sh 一致要求 10GB
+  # --build-only（migrate_legacy step 1）只构建镜像，3GB 足够；
+  # 首次完整安装需要 15GB（镜像 + 构建缓存 + 数据）；
+  # .env 已存在（更新/重跑）时与 deploy-ubuntu.sh 一致要求 3GB
   local free_kb need_gb=15
-  if [[ -f "$ENV_FILE" ]]; then need_gb=10; fi
+  if (( BUILD_ONLY )); then need_gb=3
+  elif [[ -f "$ENV_FILE" ]]; then need_gb=3; fi
   free_kb="$(df -Pk "$ROOT_DIR" | awk 'NR==2{print $4}')"
   [[ "$free_kb" =~ ^[0-9]+$ && "$free_kb" -ge $((need_gb * 1048576)) ]] || die "at least ${need_gb} GiB free disk is required"
 }
