@@ -10,12 +10,9 @@ from __future__ import annotations
 import urllib.parse
 
 import httpx
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Query
 from fastapi.responses import Response
 from loguru import logger
-
-from app.api.deps import get_current_active_user
-from common.models.user import User
 
 router = APIRouter(prefix="/chat-new")
 
@@ -49,7 +46,6 @@ _PROXY_HEADERS = {
 @router.get("/image-proxy")
 async def image_proxy(
     url: str = Query(..., description="需要代理的图片 URL（需 URL 编码）"),
-    _current_user: User = Depends(get_current_active_user),
 ) -> Response:
     """代理转发闲鱼 CDN 图片，解决浏览器直接请求时被 Referer 防盗链拦截的问题"""
     try:
