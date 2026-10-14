@@ -19,8 +19,6 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.xy_account import XYAccount
-from common.models.card import Card
-from common.models.card_item_relation import CardItemRelation
 from common.models.xy_keyword_rule import XYKeywordRule
 from common.models.default_reply import DefaultReply
 from common.models.xy_catalog_item import XYCatalogItem
@@ -100,7 +98,6 @@ class AccountImportService:
         self.errors: list[str] = []
         # 导入过程中的映射缓存
         self._account_id_to_pk: dict[str, int] = {}
-        self._card_name_spec_to_id: dict[str, int] = {}
 
     async def import_accounts(
         self,
@@ -131,8 +128,6 @@ class AccountImportService:
             await self._import_account_switches(wb)
             await self._import_ai_settings(wb)
             await self._import_catalog_items(wb)
-            await self._import_cards(wb)
-            await self._import_card_item_relations(wb)
             await self._import_keyword_rules(wb)
             await self._import_default_replies(wb)
             await self._import_message_filters(wb)
@@ -278,29 +273,9 @@ class AccountImportService:
             if not account:
                 continue
 
-            account.auto_confirm = _parse_bool(row.get("自动确认收货"))
-            account.scheduled_redelivery = _parse_bool(row.get("定时补发货"))
             account.scheduled_rate = _parse_bool(row.get("定时补评价"))
             account.auto_polish = _parse_bool(row.get("商品擦亮"))
-            account.confirm_before_send = _parse_bool(row.get("发货成功再发卡券"))
-            account.send_before_confirm = _parse_bool(row.get("卡券发送成功再确认发货"))
-            account.only_send_card = _parse_bool(row.get("只发卡券不确认发货"))
-            # 只发卡券与自动确认、两种确认顺序互斥，兼容手工编辑导致的冲突配置。
-            # 只发卡券优先；否则保留“发货成功再发卡券”优先级，清掉冲突的后置确认。
-            if account.only_send_card:
-                account.auto_confirm = False
-                account.confirm_before_send = False
-                account.send_before_confirm = False
-            elif account.confirm_before_send:
-                account.send_before_confirm = False
             account.auto_red_flower = _parse_bool(row.get("自动求小红花"))
-            account.delivery_disabled = _parse_bool(row.get("禁止发货"))
-            account.delivery_disabled_reason = _parse_str(row.get("禁止发货原因")) or None
-            account.auto_close_order = _parse_bool(row.get("主动关闭订单"))
-            account.delivery_only_card_after_close = _parse_bool(row.get("关闭后发卡券"))
-            excluded = _parse_json(row.get("禁止发货排除商品"))
-            if isinstance(excluded, list):
-                account.delivery_disabled_excluded_items = excluded
             self.session.add(account)
 
         await self.session.commit()
@@ -365,111 +340,6 @@ class AccountImportService:
                     created_at=get_beijing_now_naive(),
                 )
                 self.session.add(item)
-
-        await self.session.commit()
-
-    async def _import_cards(self, wb) -> None:
-        """导入卡券"""
-        rows = _read_sheet_rows(wb, "卡券")
-        for row in rows:
-            name = _parse_str(row.get("卡券名称"))
-            if not name:
-                continue
-            card_type = _parse_str(row.get("类型")) or "text"
-            spec_value = _parse_str(row.get("规格值"))
-
-            # 按 名称+规格值 查找
-            stmt = select(Card).where(
-                Card.user_id == self.owner_id,
-                Card.name == name,
-            )
-            if spec_value:
-                stmt = stmt.where(Card.spec_value == spec_value)
-            else:
-                stmt = stmt.where((Card.spec_value.is_(None)) | (Card.spec_value == ""))
-
-            result = await self.session.execute(stmt)
-            existing = result.scalars().first()
-
-            if existing:
-                existing.type = card_type
-                existing.enabled = _parse_bool(row.get("启用"))
-                existing.delay_seconds = _parse_int(row.get("延迟秒数"), 0)
-                existing.is_multi_spec = _parse_bool(row.get("多规格"))
-                existing.spec_name = _parse_str(row.get("规格名")) or existing.spec_name
-                existing.spec_value = spec_value or existing.spec_value
-                existing.api_config = _parse_str(row.get("API配置")) or existing.api_config
-                existing.text_content = _parse_str(row.get("文本内容")) or existing.text_content
-                existing.data_content = _parse_str(row.get("数据内容")) or existing.data_content
-                existing.image_url = _parse_str(row.get("图片URL")) or existing.image_url
-                existing.image_urls = _parse_str(row.get("多图片URL")) or existing.image_urls
-                self.session.add(existing)
-                self._card_name_spec_to_id[f"{name}|{spec_value}"] = existing.id
-            else:
-                card = Card(
-                    user_id=self.owner_id,
-                    name=name,
-                    type=card_type,
-                    enabled=_parse_bool(row.get("启用")),
-                    delay_seconds=_parse_int(row.get("延迟秒数"), 0),
-                    is_multi_spec=_parse_bool(row.get("多规格")),
-                    spec_name=_parse_str(row.get("规格名")) or None,
-                    spec_value=spec_value or None,
-                    api_config=_parse_str(row.get("API配置")) or None,
-                    text_content=_parse_str(row.get("文本内容")) or None,
-                    data_content=_parse_str(row.get("数据内容")) or None,
-                    image_url=_parse_str(row.get("图片URL")) or None,
-                    image_urls=_parse_str(row.get("多图片URL")) or None,
-                )
-                self.session.add(card)
-                await self.session.flush()
-                self._card_name_spec_to_id[f"{name}|{spec_value}"] = card.id
-
-        await self.session.commit()
-
-        # 补充映射：查询所有该用户的卡券
-        stmt = select(Card.id, Card.name, Card.spec_value).where(Card.user_id == self.owner_id)
-        result = await self.session.execute(stmt)
-        for card_id, card_name, card_spec in result.all():
-            key = f"{card_name}|{card_spec or ''}"
-            self._card_name_spec_to_id[key] = card_id
-
-    async def _import_card_item_relations(self, wb) -> None:
-        """导入卡券商品关联"""
-        rows = _read_sheet_rows(wb, "卡券商品关联")
-        for row in rows:
-            card_name = _parse_str(row.get("卡券名称"))
-            item_id = _parse_str(row.get("商品ID"))
-            if not card_name or not item_id:
-                continue
-
-            # 查找卡券ID（先精确匹配名称，不带规格）
-            card_id = None
-            for key, cid in self._card_name_spec_to_id.items():
-                if key.startswith(f"{card_name}|"):
-                    card_id = cid
-                    break
-            if not card_id:
-                continue
-
-            # 检查是否已存在
-            stmt = select(CardItemRelation).where(
-                CardItemRelation.card_id == card_id,
-                CardItemRelation.item_id == item_id,
-                CardItemRelation.user_id == self.owner_id,
-            )
-            result = await self.session.execute(stmt)
-            if result.scalars().first():
-                continue  # 已存在，跳过
-
-            source = _parse_str(row.get("来源")) or "own"
-            rel = CardItemRelation(
-                user_id=self.owner_id,
-                card_id=card_id,
-                item_id=item_id,
-                source=source,
-            )
-            self.session.add(rel)
 
         await self.session.commit()
 

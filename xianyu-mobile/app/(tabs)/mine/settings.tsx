@@ -37,15 +37,12 @@ import {
   Globe,
   Server,
   Info,
-  Settings as SettingsIcon,
   RefreshCw,
-  Save,
   RotateCcw,
   MessageSquare,
   Timer,
   EyeOff,
-  CalendarClock,
-  Wallet,
+  Settings as SettingsIcon,
 } from 'lucide-react-native';
 
 /** 设置项类型 */
@@ -67,8 +64,7 @@ type SettingCategory =
   | '基础设置'
   | 'SMTP配置'
   | 'Token获取方式'
-  | '密码登录远程配置'
-  | '提现配置';
+  | '密码登录远程配置';
 
 /**
  * 已知的系统设置项定义（按类别分组）。
@@ -117,9 +113,6 @@ const SETTING_DEFS: SettingDef[] = [
   // 密码登录远程配置（仅当 password_login.mode === 'protocol' 时展示）
   { key: 'password_login.remote_url', label: '远程URL', type: 'input', category: '密码登录远程配置', placeholder: '远程接口地址' },
   { key: 'password_login.remote_secret_key', label: '秘钥', type: 'secret', category: '密码登录远程配置', placeholder: '远程服务密钥' },
-  // 提现配置
-  { key: 'withdraw.notify_email', label: '提现通知邮箱', type: 'input', category: '提现配置', placeholder: '接收提现通知的邮箱' },
-  { key: 'withdraw.min_amount', label: '最低提现金额', type: 'input', category: '提现配置', numeric: true, placeholder: '不填则不限制' },
 ];
 
 const CATEGORIES: { name: SettingCategory; icon: typeof Shield }[] = [
@@ -127,7 +120,6 @@ const CATEGORIES: { name: SettingCategory; icon: typeof Shield }[] = [
   { name: 'SMTP配置', icon: Mail },
   { name: 'Token获取方式', icon: Globe },
   { name: '密码登录远程配置', icon: Globe },
-  { name: '提现配置', icon: Wallet },
 ];
 
 // 三个可重启服务（顺序：消息 / 后端 / 定时任务，与 Web 端一致）
@@ -151,9 +143,7 @@ const HIDEABLE_MENUS: { key: string; label: string }[] = [
   { key: 'accounts', label: '账号管理' },
   { key: 'online-chat-new', label: '在线聊天' },
   { key: 'items', label: '商品管理' },
-  { key: 'cards', label: '卡券管理' },
   { key: 'orders', label: '订单管理' },
-  { key: 'distribution', label: '分销管理' },
   { key: 'product-publish', label: '商品发布' },
   { key: 'product-monitor', label: '商品监控' },
   { key: 'keywords', label: '自动回复' },
@@ -203,9 +193,6 @@ export default function SettingsScreen() {
   // 菜单可见性状态
   const [hiddenKeys, setHiddenKeys] = useState<string[]>([]);
   const [menuSaving, setMenuSaving] = useState(false);
-
-  // 用户到期设置独立保存
-  const [userExpirySaving, setUserExpirySaving] = useState(false);
 
   // SMTP 测试邮件弹窗
   const [showTestEmail, setShowTestEmail] = useState(false);
@@ -416,37 +403,6 @@ export default function SettingsScreen() {
       Alert.alert('保存失败', (e as Error).message);
     } finally {
       setMenuSaving(false);
-    }
-  }
-
-  // 用户到期设置：独立保存（带校验）
-  async function handleUserExpirySave() {
-    const renew = (sysSettings['user.renew_month_price'] ?? '').trim();
-    const days = (sysSettings['user.register_default_days'] ?? '').trim();
-
-    if (renew !== '' && (!/^\d+(\.\d{1,2})?$/.test(renew) || Number(renew) <= 0)) {
-      Alert.alert('格式错误', '续期单价必须为大于0的数字（最多两位小数）');
-      return;
-    }
-    if (days !== '' && (!/^\d+$/.test(days) || Number(days) <= 0)) {
-      Alert.alert('格式错误', '注册默认天数必须为正整数');
-      return;
-    }
-
-    setUserExpirySaving(true);
-    try {
-      await updateSystemSetting('user.renew_month_price', renew);
-      await updateSystemSetting('user.register_default_days', days);
-      setInitialSettings((s) => ({
-        ...s,
-        'user.renew_month_price': renew,
-        'user.register_default_days': days,
-      }));
-      Alert.alert('保存成功', '用户到期设置已保存');
-    } catch (e) {
-      Alert.alert('保存失败', (e as Error).message);
-    } finally {
-      setUserExpirySaving(false);
     }
   }
 
@@ -784,59 +740,6 @@ export default function SettingsScreen() {
                   })}
                 </Card>
 
-                {/* 用户到期设置（独立保存） */}
-                <Card style={styles.section}>
-                  <View style={styles.sectionTitleRow}>
-                    <CalendarClock size={16} stroke={c.textSecondary} />
-                    <Text style={[styles.sectionTitle, { color: c.textSecondary }]}>
-                      用户到期设置
-                    </Text>
-                  </View>
-                  <Text style={[styles.hint, { color: c.textMuted }]}>
-                    配置续期单价与注册默认天数。注册天数留空表示永不过期。
-                  </Text>
-                  <View style={styles.inputField}>
-                    <Text style={[styles.fieldLabel, { color: c.text }]}>
-                      续期一个月价格（元）
-                    </Text>
-                    <Input
-                      value={sysSettings['user.renew_month_price'] ?? ''}
-                      onChangeText={(t) =>
-                        setSettingValue('user.renew_month_price', t)
-                      }
-                      placeholder="如 30.00"
-                      placeholderTextColor={c.textMuted}
-                      keyboardType="numeric"
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      style={styles.input}
-                    />
-                  </View>
-                  <View style={styles.inputField}>
-                    <Text style={[styles.fieldLabel, { color: c.text }]}>
-                      注册默认天数（天）
-                    </Text>
-                    <Input
-                      value={sysSettings['user.register_default_days'] ?? ''}
-                      onChangeText={(t) =>
-                        setSettingValue('user.register_default_days', t)
-                      }
-                      placeholder="留空表示永不过期"
-                      placeholderTextColor={c.textMuted}
-                      keyboardType="numeric"
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      style={styles.input}
-                    />
-                  </View>
-                  <Button
-                    label="保存到期设置"
-                    onPress={handleUserExpirySave}
-                    loading={userExpirySaving}
-                    disabled={userExpirySaving}
-                    style={styles.catFooterBtn}
-                  />
-                </Card>
               </>
             )}
           </View>

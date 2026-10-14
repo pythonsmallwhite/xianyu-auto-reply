@@ -120,12 +120,6 @@ async def _repair_published_item_ids() -> None:
                         f"素材[{material_id}]通过追踪码[{trace_code}]匹配到商品ID[{published_item_id}]，已回写"
                     )
 
-                    # 回写成功后触发自动建卡
-                    await _trigger_auto_card(
-                        material_id=material_id,
-                        user_id=int(user_id),
-                        published_item_id=published_item_id,
-                    )
                 except Exception as exc:
                     failed_count += 1
                     logger.warning(f"素材[{material_id}]商品ID回写异常: {exc}")
@@ -185,32 +179,3 @@ async def _update_material_published_item_id(
         if material:
             material.published_item_id = published_item_id
             await session.commit()
-
-
-async def _trigger_auto_card(
-    material_id: int,
-    user_id: int,
-    published_item_id: str,
-) -> None:
-    """回写成功后触发自动建卡流程。"""
-    try:
-        from app.services.publish_coupon_card_service import ensure_publish_coupon_card
-
-        card_result = await ensure_publish_coupon_card(
-            material_id=material_id,
-            user_id=user_id,
-            published_item_id=published_item_id,
-        )
-        if card_result.get("success"):
-            logger.info(
-                f"素材[{material_id}]商品ID回写后自动建卡完成: "
-                f"card_id={card_result.get('card_id')}, "
-                f"created={card_result.get('created')}, "
-                f"updated={card_result.get('updated')}"
-            )
-        else:
-            logger.warning(
-                f"素材[{material_id}]商品ID回写后自动建卡跳过: {card_result.get('message', '')}"
-            )
-    except Exception as exc:
-        logger.warning(f"素材[{material_id}]商品ID回写后自动建卡失败: {exc}")

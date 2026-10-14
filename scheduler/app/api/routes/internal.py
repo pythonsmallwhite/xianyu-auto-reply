@@ -129,14 +129,14 @@ async def trigger_task(task_code: str):
     手动触发任务执行
     
     Args:
-        task_code: 任务代码(redelivery/rate/polish/day_switch等)
+        task_code: 任务代码(rate/polish/day_switch等)
         
     Returns:
         操作结果
     """
     try:
         # 验证任务代码
-        if task_code not in ["redelivery", "rate", "polish", "day_switch", "cleanup_browser_data", "cleanup_unconfigured_browser_data", "fetch_orders", "fetch_pending_orders", "fetch_refund_orders", "fetch_items", "login_renew", "token_renewal", "cookies_refresh", "api_cookie_renew", "close_notice", "red_flower", "db_backup", "delivery_timeout", "listing_monitor", "seller_fill", "dm_send", "auto_order", "image_cleanup", "auto_relist_scan"]:
+        if task_code not in ["rate", "polish", "day_switch", "cleanup_browser_data", "cleanup_unconfigured_browser_data", "fetch_orders", "fetch_pending_orders", "fetch_refund_orders", "fetch_items", "login_renew", "token_renewal", "cookies_refresh", "api_cookie_renew", "close_notice", "red_flower", "db_backup", "listing_monitor", "seller_fill", "dm_send", "auto_order", "image_cleanup"]:
             return {
                 "success": False,
                 "code": 400,

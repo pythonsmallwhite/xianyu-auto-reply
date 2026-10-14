@@ -1,0 +1,1 @@
+import{i as e,k as s,p as i,ab as n}from"./index-BSVfkA55.js";const o="/api/v1/product-monitor/categories",g=()=>e(`${o}`),c=t=>i(`${o}`,{name:t}),p=(t,r)=>s(`${o}/${t}`,{name:r}),u=t=>n(`${o}/${t}`);export{c,u as d,g,p as u};

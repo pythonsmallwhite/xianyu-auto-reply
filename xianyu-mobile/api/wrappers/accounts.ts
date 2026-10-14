@@ -97,14 +97,9 @@ export interface AccountDetail {
   username?: string;
   login_password?: string;
   // Phase 3 功能开关：后端在 details 接口返回时存在则用于回显初始状态
-  auto_confirm?: boolean;
   auto_polish?: boolean;
   auto_red_flower?: boolean;
-  scheduled_redelivery?: boolean;
   scheduled_rate?: boolean;
-  confirm_before_send?: boolean;
-  send_before_confirm?: boolean;
-  only_send_card?: boolean;
   ai_reply_block_ordered_users?: boolean;
 }
 
@@ -185,28 +180,18 @@ export async function deleteAccount(accountId: string): Promise<void> {
 // Phase 3: 账号功能增强 — 9 个功能开关 / 批量操作 / 导入导出
 // ---------------------------------------------------------------------------
 
-/** 9 个功能开关的 key，与后端字段命名（snake_case）保持一致 */
+/** 功能开关的 key，与后端字段命名（snake_case）保持一致 */
 export type ToggleKey =
-  | 'auto_confirm'
   | 'auto_polish'
   | 'auto_red_flower'
-  | 'scheduled_redelivery'
   | 'scheduled_rate'
-  | 'confirm_before_send'
-  | 'send_before_confirm'
-  | 'only_send_card'
   | 'ai_reply_block_ordered_users';
 
 /** ToggleKey → 后端 PUT 路径片段 */
 const TOGGLE_PATHS: Record<ToggleKey, string> = {
-  auto_confirm: 'auto-confirm',
   auto_polish: 'auto-polish',
   auto_red_flower: 'auto-red-flower',
-  scheduled_redelivery: 'scheduled-redelivery',
   scheduled_rate: 'scheduled-rate',
-  confirm_before_send: 'confirm-before-send',
-  send_before_confirm: 'send-before-confirm',
-  only_send_card: 'only-send-card',
   ai_reply_block_ordered_users: 'ai-reply-block-ordered-users',
 };
 
@@ -218,7 +203,7 @@ export async function toggleAccountFeature(
 ): Promise<void> {
   const client = await getApiClient();
   const path = `/api/v1/cookies/${accountId}/${TOGGLE_PATHS[key]}`;
-  // 后端要求 body 字段名为 ToggleKey（snake_case，如 auto_confirm），而非 {enabled}
+  // 后端要求 body 字段名为 ToggleKey（snake_case，如 auto_polish），而非 {enabled}
   await (client.PUT as any)(path, { body: { [key]: enabled } });
 }
 

@@ -90,7 +90,7 @@ async def list_external_message_logs(
 
 @router.get("", response_model=ExternalApiResponse)
 async def get_external_message_logs(
-    secret_key: str | None = Query(default=None, description="分销秘钥"),
+    secret_key: str | None = Query(default=None, description="外部接口秘钥"),
     item_id: str | None = Query(default=None, description="商品ID"),
     message_type: str = Query(default="auto_reply", description="消息类型：auto_reply/auto_delivery"),
     page: int = Query(default=1, ge=1, description="页码"),

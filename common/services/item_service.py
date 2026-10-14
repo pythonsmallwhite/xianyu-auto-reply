@@ -13,7 +13,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Optional
 
 from loguru import logger
 from sqlalchemy import select
@@ -26,7 +26,6 @@ from common.models.xy_account import XYAccount
 from common.models.xy_catalog_item import XYCatalogItem
 from common.utils.item_origin import origin_predicates, origin_name
 from common.models.default_reply import DefaultReply
-from common.models.card import Card
 
 
 class ItemService:
@@ -194,10 +193,9 @@ class ItemService:
         items_data = [(item, acct_id) for item, acct_id, _, _ in source_rows]
 
         default_reply_map = await self._get_default_reply_status_batch(items_data)
-        card_set = await self._get_card_status_batch(items_data)
         items = []
         for item, acct_id, is_managed, is_tool_published in source_rows:
-            record = self._serialize_item(item, acct_id, default_reply_map.get((acct_id, item.item_id)), item.item_id in card_set)
+            record = self._serialize_item(item, acct_id, default_reply_map.get((acct_id, item.item_id)))
             record["source_category"] = origin_name(bool(is_managed), bool(is_tool_published))
             items.append(record)
         return items
@@ -211,7 +209,6 @@ class ItemService:
         keyword: str | None = None,
         is_polished: bool | None = None,
         is_multi_spec: bool | None = None,
-        multi_quantity_delivery: bool | None = None,
         show_history: bool = False,
     ) -> tuple[list[dict], int]:
         """获取商品列表（分页），支持多条件筛选
@@ -224,7 +221,6 @@ class ItemService:
             keyword: 关键字（支持商品ID、标题、详情）
             is_polished: 是否擦亮筛选
             is_multi_spec: 多规格筛选
-            multi_quantity_delivery: 多数量发货筛选
             
         Returns:
             (商品列表, 总数)
@@ -273,21 +269,6 @@ class ItemService:
                     )
                 )
         
-        # 多数量发货筛选（metadata_json字段）
-        if multi_quantity_delivery is not None:
-            if multi_quantity_delivery:
-                conditions.append(
-                    XYCatalogItem.metadata_json["multi_quantity_delivery"].as_boolean() == True
-                )
-            else:
-                conditions.append(
-                    or_(
-                        XYCatalogItem.metadata_json.is_(None),
-                        XYCatalogItem.metadata_json["multi_quantity_delivery"].as_boolean() == False,
-                        XYCatalogItem.metadata_json["multi_quantity_delivery"].is_(None)
-                    )
-                )
-        
         if conditions:
             base_stmt = base_stmt.where(and_(*conditions))
         
@@ -310,10 +291,9 @@ class ItemService:
         items_data = [(item, acct_id) for item, acct_id, _, _ in source_rows]
 
         default_reply_map = await self._get_default_reply_status_batch(items_data)
-        card_set = await self._get_card_status_batch(items_data)
         items = []
         for item, acct_id, is_managed, is_tool_published in source_rows:
-            record = self._serialize_item(item, acct_id, default_reply_map.get((acct_id, item.item_id)), item.item_id in card_set)
+            record = self._serialize_item(item, acct_id, default_reply_map.get((acct_id, item.item_id)))
             record["source_category"] = origin_name(bool(is_managed), bool(is_tool_published))
             items.append(record)
         return items, total
@@ -963,33 +943,6 @@ class ItemService:
         
         return reply_map
 
-    async def _get_card_status_batch(self, items_data: list) -> Set[str]:
-        """批量获取商品卡券配置状态（通过关联表+旧字段兼容，不区分用户）
-        
-        Args:
-            items_data: [(item, account_id), ...] 商品数据列表
-            
-        Returns:
-            {item_id, ...} 已配置卡券的商品ID集合
-        """
-        if not items_data:
-            return set()
-        
-        # 收集所有需要查询的 item_id
-        item_ids = list(set(item.item_id for item, _ in items_data))
-        
-        from common.services.card_matcher import CardMatcher
-        matcher = CardMatcher(self.session)
-        
-        # 按 item_id 查询卡券状态（不区分用户，与发货配置弹窗逻辑一致）
-        status_map = await matcher.get_items_with_card_status(item_ids)
-        configured_items: Set[str] = set()
-        for item_id, has_card in status_map.items():
-            if has_card:
-                configured_items.add(item_id)
-        
-        return configured_items
-
     async def get_item(self, owner_id: int | None, account_id: str, item_id: str) -> dict | None:
         stmt = (
             select(XYCatalogItem)
@@ -1071,10 +1024,7 @@ class ItemService:
         return True
 
     async def delete_item(self, account: XYAccount, item_id: str) -> bool:
-        """删除商品（同时删除关联表记录）"""
-        from loguru import logger
-        from common.services.card_matcher import CardMatcher
-        
+        """删除商品"""
         stmt = (
             select(XYCatalogItem)
             .where(
@@ -1087,12 +1037,6 @@ class ItemService:
         item = result.scalars().first()
         if not item:
             return False
-        
-        # 级联删除关联表记录
-        matcher = CardMatcher(self.session)
-        rel_count = await matcher.delete_relations_by_item_id(item_id)
-        if rel_count > 0:
-            logger.info(f"删除商品 {item_id} 的 {rel_count} 条卡券关联记录")
         
         await self.session.delete(item)
         await self.session.commit()
@@ -1107,7 +1051,7 @@ class ItemService:
         - 传入 account（调用方已校验账号归属）：按 (owner_id, account.id, item_id) 精确删除；
         - 未传 account：在 owner 范围内按 item_id 定位商品，
             * 若其所属账号仍存在 → 返回 'account_required'，要求调用方指定账号后再删；
-            * 若所属账号已不存在（孤儿商品）→ 直接按 item_id 删除并清理卡券关联。
+            * 若所属账号已不存在（孤儿商品）→ 直接按 item_id 删除。
 
         Args:
             owner_id: 用户ID（管理员场景可为 None，表示不限制归属）
@@ -1117,9 +1061,6 @@ class ItemService:
         Returns:
             'ok'：删除成功；'not_found'：商品不存在；'account_required'：商品所属账号仍存在，需指定账号
         """
-        # CardMatcher 采用局部导入，避免与 card_matcher 模块产生循环依赖（与 delete_item 保持一致）
-        from common.services.card_matcher import CardMatcher
-
         # 情况一：调用方已指定并校验账号 → 复用原有按账号删除逻辑
         if account is not None:
             ok = await self.delete_item(account, item_id)
@@ -1143,11 +1084,7 @@ class ItemService:
             # 商品所属账号仍存在 → 不允许脱离账号删除，要求指定账号
             return "account_required"
 
-        # 全部为孤儿商品（账号已删除）→ 按 item_id 删除，并清理卡券关联
-        matcher = CardMatcher(self.session)
-        rel_count = await matcher.delete_relations_by_item_id(item_id)
-        if rel_count > 0:
-            logger.info(f"删除孤儿商品 {item_id} 的 {rel_count} 条卡券关联记录")
+        # 全部为孤儿商品（账号已删除）→ 按 item_id 删除
         for it in items:
             await self.session.delete(it)
         await self.session.commit()
@@ -1165,7 +1102,7 @@ class ItemService:
     async def delete_local_items(
         self, account: XYAccount, item_ids: list[str]
     ) -> dict:
-        """按账号批量删除本地商品记录（含卡券关联），逐个提交、互不影响。
+        """按账号批量删除本地商品记录，逐个提交、互不影响。
 
         用于「删除闲鱼商品」在平台删除成功后同步清理本地库，保持本地与平台一致。
         单个商品删除失败只回滚自身并记录日志，不影响其余商品的删除。
@@ -1194,7 +1131,7 @@ class ItemService:
                 )
         return {"deleted": deleted, "failed": failed}
 
-    def _serialize_item(self, item: XYCatalogItem, account_id: str, default_reply_info: dict | None = None, has_card: bool = False) -> dict:
+    def _serialize_item(self, item: XYCatalogItem, account_id: str, default_reply_info: dict | None = None) -> dict:
         metadata = item.metadata_json or {}
         # 从 detail(整块商品JSON) 解析鱼小铺特有字段供界面展示；普通账号无此字段时返回空
         detail_raw = metadata.get("detail")
@@ -1229,10 +1166,8 @@ class ItemService:
             "has_ai_prompt": bool(item.ai_prompt),
             "is_polished": item.is_polished or False,
             "is_multi_spec": metadata.get("is_multi_spec", False),
-            "multi_quantity_delivery": metadata.get("multi_quantity_delivery", False),
             "default_reply_enabled": default_reply_info.get("enabled", False) if default_reply_info else False,
             "has_default_reply": default_reply_info.get("has_config", False) if default_reply_info else False,
-            "has_card": has_card,
             "created_at": self._format_dt(item.created_at),
             "updated_at": self._format_dt(item.updated_at),
         }

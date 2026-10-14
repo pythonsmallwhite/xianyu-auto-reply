@@ -1,6 +1,6 @@
 """公开订单查询服务。
 
-该服务负责校验分销秘钥、限定用户数据范围，并复用订单查询服务完成分页查询。
+该服务负责校验外部接口秘钥、限定用户数据范围，并复用订单查询服务完成分页查询。
 """
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ class ExternalOrderQueryService:
         self.session = session
 
     async def _resolve_owner_id(self, secret_key: str) -> int:
-        """根据分销秘钥解析可访问订单的用户 ID。"""
+        """根据外部接口秘钥解析可访问订单的用户 ID。"""
         user = await ExternalAccountService(self.session).get_user_by_secret(secret_key)
         if user is None:
             raise ExternalOrderAccessError(40001, "秘钥不存在")
@@ -52,11 +52,9 @@ class ExternalOrderQueryService:
     def _serialize_order(
         order: Any,
         item_title: str,
-        delivery_log: dict[str, Any] | None,
     ) -> dict[str, Any]:
         """将订单模型转换为公开接口返回结构。"""
         spec_parts = [part for part in (order.spec_name, order.spec_value) if part]
-        delivery_log = delivery_log or {}
         return {
             "id": str(order.id),
             "order_no": order.order_no,
@@ -89,8 +87,6 @@ class ExternalOrderQueryService:
             "delivery_content": order.delivery_content or "",
             "delivery_fail_reason": order.delivery_fail_reason or "",
             "card_only_delivered": bool(order.card_only_delivered),
-            "delivery_send_status": delivery_log.get("send_status"),
-            "delivery_send_fail_reason": delivery_log.get("send_fail_reason"),
             "source": order.source or "",
             "placed_at": safe_isoformat(order.placed_at),
             "synced_at": safe_isoformat(order.synced_at),
@@ -117,13 +113,10 @@ class ExternalOrderQueryService:
             page=page,
             page_size=page_size,
         )
-        order_nos = [order.order_no for order in orders if order.order_no]
-        delivery_logs = await order_service.get_delivery_log_status_map(order_nos)
         data = [
             self._serialize_order(
                 order,
                 item_titles.get(order.item_id, "") if order.item_id else "",
-                delivery_logs.get(order.order_no),
             )
             for order in orders
         ]

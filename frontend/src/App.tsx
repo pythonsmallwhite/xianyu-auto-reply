@@ -36,24 +36,12 @@ const Tutorial = React.lazy(() => import('@/pages/tutorial/Tutorial').then(m => 
 const ItemSearch = React.lazy(() => import('@/pages/search/ItemSearch').then(m => ({ default: m.ItemSearch })))
 const GoofishCompass = React.lazy(() => import('@/pages/compass/GoofishCompass').then(m => ({ default: m.GoofishCompass })))
 const GoofishScheduledCrawler = React.lazy(() => import('@/pages/crawler/GoofishScheduledCrawler').then(m => ({ default: m.GoofishScheduledCrawler })))
-const Cards = React.lazy(() => import('@/pages/cards/Cards').then(m => ({ default: m.Cards })))
 const PersonalSettings = React.lazy(() => import('@/pages/personalSettings/PersonalSettings').then(m => ({ default: m.PersonalSettings })))
 const Blacklist = React.lazy(() => import('@/pages/blacklist/Blacklist'))
-const SupplyManagement = React.lazy(() => import('@/pages/distribution/SupplyManagement').then(m => ({ default: m.SupplyManagement })))
-const DockedProducts = React.lazy(() => import('@/pages/distribution/DockedProducts').then(m => ({ default: m.DockedProducts })))
-const DealerManagement = React.lazy(() => import('@/pages/distribution/DealerManagement').then(m => ({ default: m.DealerManagement })))
-const FundFlows = React.lazy(() => import('@/pages/distribution/FundFlows').then(m => ({ default: m.FundFlows })))
-const SubDealerManagement = React.lazy(() => import('@/pages/distribution/SubDealerManagement').then(m => ({ default: m.SubDealerManagement })))
-const SourceManagement = React.lazy(() => import('@/pages/distribution/SourceManagement').then(m => ({ default: m.SourceManagement })))
-const AgentOrders = React.lazy(() => import('@/pages/distribution/AgentOrders').then(m => ({ default: m.AgentOrders })))
-const CardPickup = React.lazy(() => import('@/pages/distribution/CardPickup').then(m => ({ default: m.CardPickup })))
 
 // 共享多人扫码登录
 const SharedScanManager = React.lazy(() => import('@/pages/shared-scan/SharedScanManager').then(m => ({ default: m.SharedScanManager })))
 const SharedScanPage = React.lazy(() => import('@/pages/shared-scan/SharedScanPage').then(m => ({ default: m.SharedScanPage })))
-
-// 同意后发货 - 买家提货页（无需登录，公开访问）
-const AgreePickupPage = React.lazy(() => import('@/pages/agree-pickup/AgreePickupPage').then(m => ({ default: m.AgreePickupPage })))
 
 // 商品发布页面懒加载
 const ProductMaterials = React.lazy(() => import('@/pages/product-publish/ProductMaterials').then(m => ({ default: m.ProductMaterials })))
@@ -78,8 +66,6 @@ const AccountLoginLogs = React.lazy(() => import('@/pages/admin/AccountLoginLogs
 const DbBackupLogs = React.lazy(() => import('@/pages/admin/DbBackupLogs').then(m => ({ default: m.DbBackupLogs })))
 const DataManagement = React.lazy(() => import('@/pages/admin/DataManagement').then(m => ({ default: m.DataManagement })))
 const ScheduledTasks = React.lazy(() => import('@/pages/admin/ScheduledTasks').then(m => ({ default: m.ScheduledTasks })))
-const RedeliveryBatches = React.lazy(() => import('@/pages/redeliveryLogs/RedeliveryBatches').then(m => ({ default: m.RedeliveryBatches })))
-const RedeliveryBatchDetailPage = React.lazy(() => import('@/pages/redeliveryLogs/RedeliveryBatchDetail').then(m => ({ default: m.RedeliveryBatchDetailPage })))
 const RateBatches = React.lazy(() => import('@/pages/rateLogs/RateBatches').then(m => ({ default: m.RateBatches })))
 const RateBatchDetailPage = React.lazy(() => import('@/pages/rateLogs/RateBatchDetail').then(m => ({ default: m.RateBatchDetailPage })))
 const PolishBatches = React.lazy(() => import('@/pages/polishLogs/PolishBatches').then(m => ({ default: m.PolishBatches })))
@@ -315,8 +301,6 @@ function App() {
           <Route path="/forgot-password" element={<ForgotPassword />} />
           {/* 兼职端扫码页面：无需登录，公开访问 */}
           <Route path="/shared-scan-page" element={<SharedScanPage />} />
-          {/* 同意后发货提货页：无需登录，公开访问 */}
-          <Route path="/agree-pickup" element={<AgreePickupPage />} />
 
           {/* Protected routes */}
           <Route
@@ -347,15 +331,6 @@ function App() {
             <Route path="item-search" element={<ItemSearch />} />
             <Route path="goofish-compass" element={<GoofishCompass />} />
             <Route path="goofish-scheduled-crawler" element={<GoofishScheduledCrawler />} />
-            <Route path="cards" element={<Cards />} />
-            <Route path="distribution/supply" element={<SupplyManagement />} />
-            <Route path="distribution/card-pickup" element={<CardPickup />} />
-            <Route path="distribution/docked" element={<DockedProducts />} />
-            <Route path="distribution/dealers" element={<DealerManagement />} />
-            <Route path="distribution/sub-dealers" element={<SubDealerManagement />} />
-            <Route path="admin/fund-flows" element={<FundFlows />} />
-            <Route path="distribution/sources" element={<SourceManagement />} />
-            <Route path="distribution/agent-orders" element={<AgentOrders />} />
             {/* 商品发布 */}
             <Route path="product-publish/materials" element={<ProductMaterials />} />
             <Route path="product-publish/single" element={<ProductPublish />} />
@@ -387,8 +362,6 @@ function App() {
             <Route path="admin/auto-reply-logs" element={<Navigate to="/message-logs" replace />} />
             <Route path="admin/risk-logs" element={<Navigate to="/risk-logs" replace />} />
             <Route path="admin/data" element={<DataManagement />} />
-            <Route path="admin/redelivery-batches" element={<RedeliveryBatches />} />
-            <Route path="admin/redelivery-batches/:batchId" element={<RedeliveryBatchDetailPage />} />
             <Route path="admin/rate-batches" element={<RateBatches />} />
             <Route path="admin/rate-batches/:batchId" element={<RateBatchDetailPage />} />
             <Route path="admin/polish-batches" element={<PolishBatches />} />

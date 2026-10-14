@@ -191,7 +191,7 @@ export interface ListingMonitorLogCookieItem {
   secret_key: string
 }
 
-// 复制选中监控日志涉及的账号Cookie（去重，返回账号ID/Cookie/分销秘钥）
+// 复制选中监控日志涉及的账号Cookie（去重，返回账号ID/Cookie/外部接口秘钥）
 export const copyListingMonitorLogCookies = (
   logIds: number[]
 ): Promise<ApiResponse<{ list: ListingMonitorLogCookieItem[] }>> => {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Activity, Calendar, MessageSquare, RefreshCw, Shield, ShoppingCart, Users, Package, Clock, DollarSign } from 'lucide-react'
+import { Activity, Calendar, MessageSquare, RefreshCw, Shield, ShoppingCart, Users, Package, Clock } from 'lucide-react'
 import { getAccountStats } from '@/api/accounts'
 import { type AdminStats, type TodayStats, getAdminStats, getTodayStats } from '@/api/admin'
 import { useUIStore } from '@/store/uiStore'
@@ -266,10 +266,6 @@ export function Dashboard() {
                   <p className="text-sm text-slate-500">已配置密码</p>
                 </div>
                 <div className="text-center p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                  <p className="text-2xl font-bold text-purple-600">{adminStats.total_cards}</p>
-                  <p className="text-sm text-slate-500">总卡券数</p>
-                </div>
-                <div className="text-center p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
                   <p className="text-2xl font-bold text-cyan-600">{adminStats.total_keywords}</p>
                   <p className="text-sm text-slate-500">总关键词</p>
                 </div>
@@ -320,7 +316,7 @@ export function Dashboard() {
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
               </div>
             ) : todayStats ? (
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
                 <div className="text-center p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-100 dark:border-blue-800">
                   <div className="flex items-center justify-center mb-2">
                     <Users className="w-5 h-5 text-blue-500" />
@@ -341,13 +337,6 @@ export function Dashboard() {
                   </div>
                   <p className="text-2xl font-bold text-purple-600">{todayStats.today_orders}</p>
                   <p className="text-sm text-slate-500">今日订单</p>
-                </div>
-                <div className="text-center p-3 bg-cyan-50 dark:bg-cyan-900/20 rounded-lg border border-cyan-100 dark:border-cyan-800">
-                  <div className="flex items-center justify-center mb-2">
-                    <DollarSign className="w-5 h-5 text-cyan-500" />
-                  </div>
-                  <p className="text-2xl font-bold text-cyan-600">{todayStats.today_agent_orders ?? 0}</p>
-                  <p className="text-sm text-slate-500">今日代销订单</p>
                 </div>
                 <div className="text-center p-3 bg-rose-50 dark:bg-rose-900/20 rounded-lg border border-rose-100 dark:border-rose-800">
                   <div className="flex items-center justify-center mb-2">

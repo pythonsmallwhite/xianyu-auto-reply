@@ -23,7 +23,6 @@ from common.models.account_login_log import XYAccountLoginLog
 from common.models.xy_catalog_item import XYCatalogItem
 from common.models.xy_order import XYOrder
 from common.models.xy_keyword_rule import XYKeywordRule
-from common.models.card import Card
 from common.models.default_reply import DefaultReply
 from common.models.confirm_receipt_message import ConfirmReceiptMessage
 from common.models.user_setting import UserSetting
@@ -247,73 +246,6 @@ class DBManagerCompat:
                 return duration if duration is not None else 10
         return self._run_async(_query)
     
-    def get_auto_confirm(self, cookie_id: str) -> bool:
-        """获取自动确认设置"""
-        async def _query(session_maker):
-            async with session_maker() as session:
-                stmt = select(XYAccount.auto_confirm).where(XYAccount.account_id == cookie_id)
-                result = await session.execute(stmt)
-                auto_confirm = result.scalar_one_or_none()
-                return bool(auto_confirm) if auto_confirm is not None else False
-        return self._run_async(_query)
-    
-    def get_confirm_before_send(self, cookie_id: str) -> bool:
-        """获取发货成功再发卡券开关设置"""
-        async def _query(session_maker):
-            async with session_maker() as session:
-                stmt = select(XYAccount.confirm_before_send).where(XYAccount.account_id == cookie_id)
-                result = await session.execute(stmt)
-                confirm_before_send = result.scalar_one_or_none()
-                return bool(confirm_before_send) if confirm_before_send is not None else False
-        return self._run_async(_query)
-
-    def get_send_before_confirm(self, cookie_id: str) -> bool:
-        """获取卡券发送成功再确认发货开关设置"""
-        async def _query(session_maker):
-            async with session_maker() as session:
-                stmt = select(XYAccount.send_before_confirm).where(XYAccount.account_id == cookie_id)
-                result = await session.execute(stmt)
-                send_before_confirm = result.scalar_one_or_none()
-                return bool(send_before_confirm) if send_before_confirm is not None else False
-        return self._run_async(_query)
-
-    def get_only_send_card(self, cookie_id: str) -> bool:
-        """获取只发卡券、不确认发货开关设置"""
-        async def _query(session_maker):
-            async with session_maker() as session:
-                stmt = select(XYAccount.only_send_card).where(XYAccount.account_id == cookie_id)
-                result = await session.execute(stmt)
-                value = result.scalar_one_or_none()
-                return bool(value) if value is not None else False
-        return self._run_async(_query)
-
-    def get_agree_deliver_config(self, cookie_id: str) -> dict:
-        """获取同意后发货配置（开关/通知信息/提货URL），一次查询返回。
-
-        Args:
-            cookie_id: 闲鱼账号标识（account_id）
-        Returns:
-            {"enabled": bool, "notify_message": str|None, "pickup_url": str|None}；
-            无记录时返回 enabled=False 的空配置
-        """
-        async def _query(session_maker):
-            async with session_maker() as session:
-                stmt = select(
-                    XYAccount.agree_deliver_enabled,
-                    XYAccount.agree_deliver_notify_message,
-                    XYAccount.agree_deliver_pickup_url,
-                ).where(XYAccount.account_id == cookie_id)
-                result = await session.execute(stmt)
-                row = result.first()
-                if not row:
-                    return {"enabled": False, "notify_message": None, "pickup_url": None}
-                return {
-                    "enabled": bool(row[0]),
-                    "notify_message": row[1],
-                    "pickup_url": row[2],
-                }
-        return self._run_async(_query)
-
     def get_cookie_status(self, cookie_id: str) -> bool:
         """获取账号是否启用"""
         async def _query(session_maker):
@@ -458,15 +390,9 @@ class DBManagerCompat:
                     'detail': metadata.get('detail', ''),
                     'desc': metadata.get('description', ''),
                     'ai_prompt': item.ai_prompt or '',
-                    'multi_quantity_delivery': metadata.get('multi_quantity_delivery', False),
                     'multi_spec': metadata.get('is_multi_spec', False),
                 }
         return self._run_async(_query)
-    
-    def get_item_multi_quantity_delivery_status(self, cookie_id: str, item_id: str) -> bool:
-        """获取多数量发货状态"""
-        info = self.get_item_info(cookie_id, item_id)
-        return info.get('multi_quantity_delivery', False) if info else False
     
     # ==================== 风控日志 ====================
     
@@ -712,27 +638,6 @@ class DBManagerCompat:
                 }
         return self._run_async(_query)
     
-    def update_order_yifan_status(self, order_id: str, **kwargs) -> bool:
-        """更新订单亦凡状态"""
-        async def _update(session_maker):
-            async with session_maker() as session:
-                values = {}
-                if 'yifan_order_no' in kwargs:
-                    values['yifan_order_no'] = kwargs['yifan_order_no']
-                if 'chat_id' in kwargs:
-                    values['chat_id'] = kwargs['chat_id']
-                if not values:
-                    return True
-                stmt = update(XYOrder).where(XYOrder.order_no == order_id).values(**values)
-                result = await session.execute(stmt)
-                await session.commit()
-                return result.rowcount > 0
-        try:
-            return self._run_async(_update)
-        except Exception as e:
-            logger.error(f"更新订单状态失败: {e}")
-            return False
-    
     def update_order_bargain_status(self, order_id: str, is_bargain: bool = True) -> bool:
         """更新订单小刀状态
         
@@ -833,70 +738,6 @@ class DBManagerCompat:
             return self._run_async(_update)
         except Exception as e:
             logger.error(f"更新关键词图片URL失败: {e}")
-            return False
-    
-    # ==================== 卡券相关 ====================
-    
-    def update_card_image_url(self, card_id: int, image_url: str) -> bool:
-        """更新卡券图片URL"""
-        async def _update():
-            async with async_session_maker() as session:
-                stmt = update(Card).where(Card.id == card_id).values(image_url=image_url)
-                result = await session.execute(stmt)
-                await session.commit()
-                return result.rowcount > 0
-        try:
-            return self._run_async(_update())
-        except Exception as e:
-            logger.error(f"更新卡券图片URL失败: {e}")
-            return False
-    
-    def update_card_image_urls(self, card_id: int, index: int, cdn_url: str) -> bool:
-        """更新卡券多图片列表中指定索引的图片URL
-        
-        Args:
-            card_id: 卡券ID
-            index: 图片索引（0-2）
-            cdn_url: CDN图片URL
-            
-        Returns:
-            是否更新成功
-        """
-        import json
-        
-        async def _update(session_maker):
-            async with session_maker() as session:
-                # 先获取当前的image_urls
-                stmt = select(Card.image_urls).where(Card.id == card_id)
-                result = await session.execute(stmt)
-                current_urls = result.scalar_one_or_none()
-                
-                # 解析JSON
-                if current_urls:
-                    try:
-                        urls_list = json.loads(current_urls)
-                    except Exception:
-                        urls_list = []
-                else:
-                    urls_list = []
-                
-                # 确保列表长度足够
-                while len(urls_list) <= index:
-                    urls_list.append("")
-                
-                # 更新指定索引的URL
-                urls_list[index] = cdn_url
-                
-                # 保存回数据库
-                new_urls_json = json.dumps(urls_list, ensure_ascii=False)
-                update_stmt = update(Card).where(Card.id == card_id).values(image_urls=new_urls_json)
-                result = await session.execute(update_stmt)
-                await session.commit()
-                return result.rowcount > 0
-        try:
-            return self._run_async(_update)
-        except Exception as e:
-            logger.error(f"更新卡券多图片URL失败: {e}")
             return False
     
     def update_confirm_receipt_image_url(self, cookie_id: str, image_url: str) -> bool:
@@ -1541,129 +1382,6 @@ class DBManagerCompat:
             logger.error(f"插入或更新订单失败: {e}")
             return False
     
-    def get_cards_by_item_id(self, item_id: str, spec_name: str = None, spec_value: str = None) -> List[Dict[str, Any]]:
-        """根据商品ID获取卡券列表（通过关联表查询，含向后兼容回退）
-        
-        Args:
-            item_id: 商品ID
-            spec_name: 规格名称（可选，用于多规格匹配）
-            spec_value: 规格值（可选，用于多规格匹配）
-            
-        Returns:
-            卡券列表
-        """
-        async def _query(session_maker):
-            async with session_maker() as session:
-                from common.services.card_matcher import CardMatcher
-                matcher = CardMatcher(session)
-                return await matcher.get_cards_by_item_id(item_id, spec_name, spec_value)
-        
-        try:
-            return self._run_async(_query) or []
-        except Exception as e:
-            logger.error(f"根据商品ID获取卡券失败: {e}")
-            return []
-    
-    def consume_batch_data(self, card_id: int) -> Optional[str]:
-        """消费批量数据卡券的一条数据
-
-        从卡券的 data_content 中取出第一行数据并删除。
-
-        并发安全设计（CAS 乐观锁，不依赖行锁与事务隔离级别）：
-            采用「读取当前内容 → 用单条 UPDATE 原子替换」的比较并交换方式：
-            ``UPDATE xy_cards SET data_content=<去掉首行后的剩余内容>
-              WHERE id=:card_id AND data_content=<读取到的旧内容>``。
-            MySQL（InnoDB）保证对同一行的单条 UPDATE 是串行执行的，因此并发的
-            多个消费请求中只有一个能匹配到旧内容并成功（rowcount=1），其余请求
-            rowcount=0（说明内容已被其他请求改写）后自动重读重试，从根本上避免
-            同一条卡密/兑换码被重复派发给不同订单。
-
-            相比 ``SELECT ... FOR UPDATE`` 行锁，本方案不依赖连接是否处于显式
-            事务、隔离级别或 autocommit 行为，在任意运行环境下都成立。
-
-        Args:
-            card_id: 卡券ID
-
-        Returns:
-            消费的数据内容或None
-        """
-        # CAS 失败（被其他并发请求抢先消费）时的最大重试次数，避免极端竞争下死循环
-        max_cas_retries = 50
-
-        async def _consume(session_maker):
-            async with session_maker() as session:
-                for _ in range(max_cas_retries):
-                    # 1. 读取当前卡券内容（普通读，无需行锁）
-                    stmt = select(Card.data_content).where(Card.id == card_id)
-                    result = await session.execute(stmt)
-                    current_content = result.scalar_one_or_none()
-
-                    if current_content is None:
-                        logger.warning(f"卡券 {card_id} 不存在或没有批量数据")
-                        return None
-
-                    # 2. 计算首行与剩余内容
-                    lines = [line.strip() for line in current_content.split('\n') if line.strip()]
-                    if not lines:
-                        logger.warning(f"卡券 {card_id} 批量数据已用完")
-                        return None
-
-                    consumed_data = lines[0]
-                    remaining_lines = lines[1:]
-                    new_content = '\n'.join(remaining_lines) if remaining_lines else ''
-
-                    # 3. CAS 原子替换：仅当 data_content 仍等于刚读取到的旧值时才更新
-                    #    并发下只有一个请求能命中（rowcount=1），其余 rowcount=0 重试
-                    cas_stmt = (
-                        update(Card)
-                        .where(Card.id == card_id, Card.data_content == current_content)
-                        .values(data_content=new_content)
-                    )
-                    cas_result = await session.execute(cas_stmt)
-                    await session.commit()
-
-                    if cas_result.rowcount == 1:
-                        logger.info(f"卡券 {card_id} 消费数据成功，剩余 {len(remaining_lines)} 条")
-                        return consumed_data
-
-                    # rowcount=0：内容已被其他并发请求改写，重读重试
-                    logger.warning(f"卡券 {card_id} 消费存在并发竞争，重试中...")
-
-                logger.error(f"卡券 {card_id} 消费失败：并发竞争超过最大重试次数 {max_cas_retries}")
-                return None
-
-        try:
-            return self._run_async(_consume)
-        except Exception as e:
-            logger.error(f"消费批量数据失败: {e}")
-            return None
-
-    def increment_delivery_count(self, card_id: int) -> bool:
-        """增加卡券的发货次数
-        
-        Args:
-            card_id: 卡券ID
-            
-        Returns:
-            是否更新成功
-        """
-        async def _increment(session_maker):
-            async with session_maker() as session:
-                stmt = (
-                    update(Card)
-                    .where(Card.id == card_id)
-                    .values(delivery_count=Card.delivery_count + 1)
-                )
-                result = await session.execute(stmt)
-                await session.commit()
-                return result.rowcount > 0
-        
-        try:
-            return self._run_async(_increment) or False
-        except Exception as e:
-            logger.error(f"增加发货次数失败: {e}")
-            return False
-
     # ==================== 消息过滤相关 ====================
     
     def get_message_filter_keywords(self, cookie_id: str, filter_type: str = 'skip_reply') -> List[str]:

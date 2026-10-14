@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { ShoppingCart, RefreshCw, Search, Trash2, Eye, X, Send, Loader2, Settings, Filter, Ban } from 'lucide-react'
-import { fetchXianyuOrders, getOrders, deleteOrder, batchDeleteOrders, getOrderDetail, manualDelivery, type OrderDetail, type OrderFilterParams } from '@/api/orders'
+import { ShoppingCart, RefreshCw, Search, Trash2, Eye, X, Loader2, Settings, Filter, Ban } from 'lucide-react'
+import { fetchXianyuOrders, getOrders, deleteOrder, batchDeleteOrders, getOrderDetail, type OrderDetail, type OrderFilterParams } from '@/api/orders'
 import { getAccountDetails } from '@/api/accounts'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
@@ -12,7 +12,7 @@ import { BlacklistLevelModal } from './BlacklistLevelModal'
 import type { Order, Account } from '@/types'
 
 // 列配置类型
-type ColumnKey = 'cookie_id' | 'order_id' | 'receiver' | 'item_id' | 'sku_info' | 'buyer_id' | 'buyer_fish_nick' | 'chat_id' | 'quantity' | 'amount' | 'status' | 'delivery_method' | 'delivery_send_status' | 'delivery_fail_reason' | 'is_bargain' | 'is_rated' | 'is_red_flower' | 'is_unregistered' | 'unregister_error_reason' | 'is_agent_order' | 'source' | 'placed_at' | 'created_at'
+type ColumnKey = 'cookie_id' | 'order_id' | 'receiver' | 'item_id' | 'sku_info' | 'buyer_id' | 'buyer_fish_nick' | 'chat_id' | 'quantity' | 'amount' | 'status' | 'delivery_method' | 'delivery_fail_reason' | 'is_bargain' | 'is_rated' | 'is_red_flower' | 'is_unregistered' | 'unregister_error_reason' | 'source' | 'placed_at' | 'created_at'
 
 interface ColumnConfig {
   key: ColumnKey
@@ -35,14 +35,12 @@ const defaultColumns: ColumnConfig[] = [
   { key: 'amount', label: '金额', visible: true, fixed: true },
   { key: 'status', label: '状态', visible: true, fixed: true },
   { key: 'delivery_method', label: '发货方式', visible: true, fixed: true },
-  { key: 'delivery_send_status', label: '发送状态', visible: true },
   { key: 'delivery_fail_reason', label: '发货失败原因', visible: true },
   { key: 'is_bargain', label: '小刀', visible: true, fixed: true },
   { key: 'is_rated', label: '已评价', visible: true, fixed: true },
   { key: 'is_red_flower', label: '小红花', visible: true, fixed: true },
   { key: 'is_unregistered', label: '已注销', visible: true, fixed: true },
   { key: 'unregister_error_reason', label: '注销错误', visible: true, fixed: true },
-  { key: 'is_agent_order', label: '代销', visible: true, fixed: true },
   { key: 'source', label: '数据来源', visible: true },
   { key: 'placed_at', label: '订单时间', visible: true, fixed: true },
   { key: 'created_at', label: '创建时间', visible: false },
@@ -72,7 +70,6 @@ export function Orders() {
   const [detailModalOpen, setDetailModalOpen] = useState(false)
   const [orderDetail, setOrderDetail] = useState<OrderDetail | null>(null)
   const [loadingDetail, setLoadingDetail] = useState(false)
-  const [deliveringOrderId, setDeliveringOrderId] = useState<string | null>(null)
   // 分页状态
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
@@ -89,7 +86,6 @@ export function Orders() {
     is_rated: null,
     start_date: null,
     end_date: null,
-    delivery_send_status: null,
   })
 
   // 勾选状态
@@ -98,7 +94,6 @@ export function Orders() {
   // 确认弹窗状态
   const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false)
-  const [deliveryConfirm, setDeliveryConfirm] = useState<{ open: boolean; orderNo: string | null }>({ open: false, orderNo: null })
   const [deleting, setDeleting] = useState(false)
 
   // 筛选面板展开状态
@@ -175,7 +170,6 @@ export function Orders() {
       is_rated: null,
       start_date: null,
       end_date: null,
-      delivery_send_status: null,
     }
     setFilters(emptyFilters)
     setSelectedAccount('')
@@ -258,26 +252,6 @@ export function Orders() {
       setDetailModalOpen(false)
     } finally {
       setLoadingDetail(false)
-    }
-  }
-
-  const handleManualDelivery = async (orderNo: string) => {
-    setDeliveringOrderId(orderNo)
-    setDeliveryConfirm({ open: false, orderNo: null })
-    try {
-      const result = await manualDelivery(orderNo)
-      if (result.success) {
-        addToast({ type: 'success', message: `发货成功: ${result.data?.card_name || ''}` })
-      } else {
-        addToast({ type: 'error', message: result.message || '发货失败' })
-      }
-    } catch (error: unknown) {
-      const axiosError = error as { response?: { data?: { detail?: string } } }
-      const errorMessage = axiosError.response?.data?.detail || '发货失败'
-      addToast({ type: 'error', message: errorMessage })
-    } finally {
-      loadOrders(currentPage, pageSize, filters)
-      setDeliveringOrderId(null)
     }
   }
 
@@ -504,20 +478,6 @@ export function Orders() {
                 </select>
               </div>
               <div className="input-group">
-                <label className="input-label">发送状态</label>
-                <select
-                  value={filters.delivery_send_status || ''}
-                  onChange={(e) => handleFilterChange('delivery_send_status', e.target.value || null)}
-                  className="input-ios"
-                >
-                  <option value="">全部</option>
-                  <option value="success">发送成功</option>
-                  <option value="failed">发送失败</option>
-                  <option value="unknown">待确认</option>
-                  <option value="timeout">超时</option>
-                </select>
-              </div>
-              <div className="input-group">
                 <label className="input-label">小刀</label>
                 <select
                   value={filters.is_bargain === null ? '' : String(filters.is_bargain)}
@@ -708,33 +668,6 @@ export function Orders() {
                                 )}
                               </td>
                             )
-                          case 'delivery_send_status':
-                            return (
-                              <td key={col.key} className="whitespace-nowrap text-sm">
-                                {order.delivery_send_status ? (
-                                  <div className="group relative cursor-pointer">
-                                    <span className={
-                                      order.delivery_send_status === 'success' ? 'badge-success' :
-                                      order.delivery_send_status === 'failed' ? 'badge-danger' :
-                                      order.delivery_send_status === 'timeout' ? 'badge-warning' :
-                                      'badge-gray'
-                                    }>
-                                      {order.delivery_send_status === 'success' ? '发送成功' :
-                                       order.delivery_send_status === 'failed' ? '发送失败' :
-                                       order.delivery_send_status === 'timeout' ? '超时' :
-                                       '待确认'}
-                                    </span>
-                                    {order.delivery_send_fail_reason ? (
-                                      <div className="absolute left-0 top-full mt-1 z-50 hidden group-hover:block bg-gray-800 text-white text-xs rounded-lg px-3 py-2 max-w-sm whitespace-normal shadow-lg break-words">
-                                        {order.delivery_send_fail_reason}
-                                      </div>
-                                    ) : null}
-                                  </div>
-                                ) : (
-                                  <span className="text-gray-400">-</span>
-                                )}
-                              </td>
-                            )
                           case 'delivery_fail_reason':
                             return (
                               <td key={col.key} className="whitespace-nowrap text-sm">
@@ -798,16 +731,6 @@ export function Orders() {
                                   : <span className="text-slate-400">-</span>}
                               </td>
                             )
-                          case 'is_agent_order':
-                            return (
-                              <td key={col.key} className="whitespace-nowrap">
-                                {order.is_agent_order ? (
-                                  <span className="badge-info">代销</span>
-                                ) : (
-                                  <span className="badge-gray">自营</span>
-                                )}
-                              </td>
-                            )
                           case 'source':
                             return (
                               <td key={col.key} className="whitespace-nowrap text-sm">
@@ -846,22 +769,6 @@ export function Orders() {
                             title="查看详情"
                           >
                             <Eye className="w-4 h-4 text-blue-500" />
-                          </button>
-                          <button
-                            onClick={() => setDeliveryConfirm({ open: true, orderNo: order.order_id })}
-                            disabled={deliveringOrderId === order.order_id || order.status === 'shipped' || order.status === 'completed' || order.card_only_delivered}
-                            className={`p-2 rounded-lg transition-colors ${
-                              order.status === 'shipped' || order.status === 'completed' || order.card_only_delivered
-                                ? 'opacity-50 cursor-not-allowed'
-                                : 'hover:bg-green-50 dark:hover:bg-green-900/20'
-                            }`}
-                            title={order.card_only_delivered ? '卡券已发送' : (order.status === 'shipped' || order.status === 'completed' ? '已发货' : '手动发货')}
-                          >
-                            {deliveringOrderId === order.order_id ? (
-                              <Loader2 className="w-4 h-4 text-green-500 animate-spin" />
-                            ) : (
-                              <Send className="w-4 h-4 text-green-500" />
-                            )}
                           </button>
                           <button
                             onClick={() => setBlacklistModal({ open: true, orders: [{ buyer_id: order.buyer_id, cookie_id: order.cookie_id, item_id: order.item_id }] })}
@@ -1043,14 +950,6 @@ export function Orders() {
                           <span className="text-gray-400">未发货</span>
                         )}
                       </div>
-                      <div className="flex justify-between py-1 border-b border-gray-100 dark:border-gray-700">
-                        <span className="text-gray-500">订单类型</span>
-                        {orderDetail.is_agent_order ? (
-                          <span className="badge-info">代销订单</span>
-                        ) : (
-                          <span className="badge-gray">自营订单</span>
-                        )}
-                      </div>
                     </div>
                   </div>
 
@@ -1074,34 +973,6 @@ export function Orders() {
                         <pre className="whitespace-pre-wrap break-words text-red-700 dark:text-red-300">
                           {orderDetail.delivery_fail_reason}
                         </pre>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* 关联消息日志：发送状态 */}
-                  {orderDetail.delivery_send_status && (
-                    <div>
-                      <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">消息发送状态</h3>
-                      <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3 text-sm space-y-2">
-                        <div className="flex items-center gap-2">
-                          <span className="text-gray-500">发送状态</span>
-                          <span className={
-                            orderDetail.delivery_send_status === 'success' ? 'badge-success' :
-                            orderDetail.delivery_send_status === 'failed' ? 'badge-danger' :
-                            orderDetail.delivery_send_status === 'timeout' ? 'badge-warning' :
-                            'badge-gray'
-                          }>
-                            {orderDetail.delivery_send_status === 'success' ? '发送成功' :
-                             orderDetail.delivery_send_status === 'failed' ? '发送失败' :
-                             orderDetail.delivery_send_status === 'timeout' ? '超时' :
-                             '待确认'}
-                          </span>
-                        </div>
-                        {orderDetail.delivery_send_fail_reason ? (
-                          <pre className="whitespace-pre-wrap break-words text-red-700 dark:text-red-300">
-                            {orderDetail.delivery_send_fail_reason}
-                          </pre>
-                        ) : null}
                       </div>
                     </div>
                   )}
@@ -1185,18 +1056,6 @@ export function Orders() {
         loading={deleting}
         onConfirm={handleBatchDelete}
         onCancel={() => setBatchDeleteConfirm(false)}
-      />
-
-      {/* 发货确认弹窗 */}
-      <ConfirmModal
-        isOpen={deliveryConfirm.open}
-        title="发货确认"
-        message="确定要手动发货吗？"
-        confirmText="确定发货"
-        cancelText="取消"
-        type="warning"
-        onConfirm={() => deliveryConfirm.orderNo && handleManualDelivery(deliveryConfirm.orderNo)}
-        onCancel={() => setDeliveryConfirm({ open: false, orderNo: null })}
       />
 
       {/* 列设置面板 */}

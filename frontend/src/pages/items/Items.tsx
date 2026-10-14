@@ -1,11 +1,9 @@
 import { OfflineBatches } from './OfflineBatches'
 import { useEffect, useState, useRef } from 'react'
-import { CheckSquare, Download, Edit2, ExternalLink, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Settings, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Unlink, Tag } from 'lucide-react'
-import { batchDeleteItems, batchDeleteXianyuItems, batchOfflineItems, deleteItem, fetchAllItemsFromAccessibleAccounts, fetchAllItemsFromAccount, getItemsPaginated, updateItem, updateItemMultiQuantityDelivery, updateItemMultiSpec, updateItemPrice, getItemDefaultReply, saveItemDefaultReply, deleteItemDefaultReply, batchSaveItemDefaultReply, batchDeleteItemDefaultReply, getItemAiPrompt, saveItemAiPrompt, batchDeleteItemAiPrompt, batchSaveItemAiPrompt, uploadItemDefaultReplyImage, uploadBatchDefaultReplyImage, type ItemFilterParams } from '@/api/items'
+import { CheckSquare, Download, Edit2, ExternalLink, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Tag } from 'lucide-react'
+import { batchDeleteItems, batchDeleteXianyuItems, batchOfflineItems, deleteItem, fetchAllItemsFromAccessibleAccounts, fetchAllItemsFromAccount, getItemsPaginated, updateItem, updateItemMultiSpec, updateItemPrice, getItemDefaultReply, saveItemDefaultReply, deleteItemDefaultReply, batchSaveItemDefaultReply, batchDeleteItemDefaultReply, getItemAiPrompt, saveItemAiPrompt, batchDeleteItemAiPrompt, batchSaveItemAiPrompt, uploadItemDefaultReplyImage, uploadBatchDefaultReplyImage, type ItemFilterParams } from '@/api/items'
 import { getAccountDetails } from '@/api/accounts'
 import { getUserSetting } from '@/api/settings'
-import { batchClearItemRelations } from '@/api/cards'
-import { ItemCardRelationModal } from './ItemCardRelationModal'
 import SellerItemEditModal from './SellerItemEditModal'
 import BatchSellerItemEditModal from './BatchSellerItemEditModal'
 import { useUIStore } from '@/store/uiStore'
@@ -16,7 +14,7 @@ import { ConfirmModal } from '@/components/common/ConfirmModal'
 import type { Account, Item } from '@/types'
 import LocationContactReplyFields, { DEFAULT_LOCATION_TITLE, type LocationContactReplyValue } from '@/pages/common/LocationContactReplyFields'
 
-type ItemBooleanFilterKey = 'is_polished' | 'is_multi_spec' | 'multi_quantity_delivery'
+type ItemBooleanFilterKey = 'is_polished' | 'is_multi_spec'
 type DefaultReplyType = 'text' | 'api' | 'external_contact'
 
 const EMPTY_LOCATION_REPLY: LocationContactReplyValue = {
@@ -53,7 +51,6 @@ export function Items() {
   const [filters, setFilters] = useState<ItemFilterParams>({
     is_polished: null,
     is_multi_spec: null,
-    multi_quantity_delivery: null,
   })
 
   // 编辑弹窗状态
@@ -65,9 +62,6 @@ export function Items() {
   // 鱼小铺商品编辑弹窗状态（界面同单品发布，提交后同步到闲鱼平台）
   const [sellerEditingItem, setSellerEditingItem] = useState<Item | null>(null)
   const [batchEditingItems, setBatchEditingItems] = useState<Item[] | null>(null)
-
-  // 卡券关联选择弹窗
-  const [relationItem, setRelationItem] = useState<Item | null>(null)
 
   // 规格明细弹窗状态（鱼小铺多规格商品）
   const [skuDetailItem, setSkuDetailItem] = useState<Item | null>(null)
@@ -144,7 +138,6 @@ export function Items() {
   const [batchDeleteDefaultReplyConfirm, setBatchDeleteDefaultReplyConfirm] = useState(false)
   const [deleteAiPromptConfirm, setDeleteAiPromptConfirm] = useState(false)
   const [batchDeleteAiPromptConfirm, setBatchDeleteAiPromptConfirm] = useState(false)
-  const [batchClearCardRelationsConfirm, setBatchClearCardRelationsConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
   // const hasSearchEffectInitializedRef = useRef(false)  // 已改为手动查询，不再需要
   const skipNextSearchEffectRef = useRef(false)
@@ -213,7 +206,6 @@ export function Items() {
     const emptyFilters: ItemFilterParams = {
       is_polished: null,
       is_multi_spec: null,
-      multi_quantity_delivery: null,
     }
     setFilters(emptyFilters)
     skipNextSearchEffectRef.current = !!searchKeyword.trim()
@@ -561,18 +553,6 @@ export function Items() {
     }
   }
 
-  // 切换多数量发货状态
-  const handleToggleMultiQuantity = async (item: Item) => {
-    try {
-      const newStatus = !item.multi_quantity_delivery
-      await updateItemMultiQuantityDelivery(item.cookie_id, item.item_id, newStatus)
-      addToast({ type: 'success', message: `多数量发货已${newStatus ? '开启' : '关闭'}` })
-      loadItems()
-    } catch {
-      addToast({ type: 'error', message: '操作失败' })
-    }
-  }
-
   // 切换多规格状态
   const handleToggleMultiSpec = async (item: Item) => {
     try {
@@ -694,12 +674,6 @@ export function Items() {
       setEditSaving(false)
     }
   }
-
-  // 打开卡券关联选择弹窗
-  const handleOpenDeliveryConfig = (item: Item) => {
-    setRelationItem(item)
-  }
-
 
   // ==================== 商品默认回复 ====================
   
@@ -1180,42 +1154,6 @@ export function Items() {
     }
   }
 
-  // ==================== 批量清空关联卡券 ====================
-
-  const handleBatchClearCardRelations = async () => {
-    if (selectedIds.size === 0) {
-      addToast({ type: 'warning', message: '请先选择要清空关联卡券的商品' })
-      return
-    }
-
-    // 获取选中商品的item_id
-    const selectedItemIds = items
-      .filter((item) => selectedIds.has(item.id))
-      .map((item) => item.item_id)
-
-    if (selectedItemIds.length === 0) {
-      addToast({ type: 'warning', message: '未找到选中的商品' })
-      return
-    }
-
-    setDeleting(true)
-    try {
-      const result = await batchClearItemRelations(selectedItemIds)
-      if (result.success) {
-        addToast({ type: 'success', message: result.message || '清空关联卡券成功' })
-        setSelectedIds(new Set())
-        setBatchClearCardRelationsConfirm(false)
-        loadItems()
-      } else {
-        addToast({ type: 'error', message: result.message || '清空失败' })
-      }
-    } catch {
-      addToast({ type: 'error', message: '清空关联卡券失败' })
-    } finally {
-      setDeleting(false)
-    }
-  }
-
   // ==================== 批量新增AI提示词 ====================
 
   // 打开批量新增AI提示词弹窗
@@ -1365,10 +1303,6 @@ export function Items() {
                 <Trash2 className="w-3.5 h-3.5" />
                 删除AI提示词
               </button>
-              <button onClick={() => setBatchClearCardRelationsConfirm(true)} className="btn-ios-secondary btn-sm whitespace-nowrap">
-                <Unlink className="w-3.5 h-3.5" />
-                清空关联卡券
-              </button>
             </>
           )}
           <button
@@ -1497,18 +1431,6 @@ export function Items() {
                 <option value="false">关闭</option>
               </select>
             </div>
-            <div className="input-group min-w-[140px]">
-              <label className="input-label">多数量发货</label>
-              <select
-                value={filters.multi_quantity_delivery === null ? '' : String(filters.multi_quantity_delivery)}
-                onChange={(e) => handleFilterChange('multi_quantity_delivery', e.target.value === '' ? null : e.target.value === 'true')}
-                className="input-ios"
-              >
-                <option value="">全部</option>
-                <option value="true">开启</option>
-                <option value="false">关闭</option>
-              </select>
-            </div>
             {/* 查询/重置按钮统一放在筛选行最右侧 */}
             <div className="flex items-end gap-2 ml-auto">
               <button
@@ -1570,8 +1492,6 @@ export function Items() {
                   <th className="min-w-[100px] text-center">是否擦亮</th>
                   <th className="min-w-[120px] text-center">规格数</th>
                   <th className="min-w-[100px] text-center">多规格</th>
-                  <th className="min-w-[120px] text-center">多数量发货</th>
-                  <th className="min-w-[110px] text-center">关联卡券</th>
                   <th className="min-w-[110px] text-center">默认回复</th>
                   <th className="min-w-[110px] text-center">AI提示词</th>
                   <th className="min-w-[170px]">创建时间</th>
@@ -1582,7 +1502,7 @@ export function Items() {
             <tbody>
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={18}>
+                  <td colSpan={16}>
                     <div className="empty-state py-8">
                       <Package className="empty-state-icon" />
                       <p className="text-gray-500">暂无商品数据</p>
@@ -1681,33 +1601,6 @@ export function Items() {
                         title={(item.is_multi_spec || item.has_sku) ? '点击关闭多规格' : '点击开启多规格'}
                       >
                         {(item.is_multi_spec || item.has_sku) ? '已开启' : '已关闭'}
-                      </button>
-                    </td>
-                    <td>
-                      <button
-                        onClick={() => handleToggleMultiQuantity(item)}
-                        className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
-                          item.multi_quantity_delivery
-                            ? 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400'
-                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400'
-                        }`}
-                        title={item.multi_quantity_delivery ? '点击关闭多数量发货' : '点击开启多数量发货'}
-                      >
-                        {item.multi_quantity_delivery ? '已开启' : '已关闭'}
-                      </button>
-                    </td>
-                    <td>
-                      <button
-                        onClick={() => handleOpenDeliveryConfig(item)}
-                        className={`px-2 py-1 rounded text-xs font-medium transition-colors flex items-center gap-1 ${
-                          item.has_card
-                            ? 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400'
-                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400'
-                        }`}
-                        title={item.has_card ? '已关联卡券' : '点击查看关联卡券'}
-                      >
-                        <Settings className="w-3 h-3" />
-                        {item.has_card ? '已配置' : '未配置'}
                       </button>
                     </td>
                     <td>
@@ -1833,19 +1726,6 @@ export function Items() {
           </div>
         )}
       </div>
-
-      {/* 卡券关联选择弹窗 */}
-      {relationItem && (
-        <ItemCardRelationModal
-          itemId={relationItem.item_id}
-          itemName={relationItem.item_title || relationItem.title || relationItem.item_id}
-          onClose={() => setRelationItem(null)}
-          onSaved={() => {
-            setRelationItem(null)
-            loadItems()
-          }}
-        />
-      )}
 
       {/* 规格明细弹窗（鱼小铺多规格商品） */}
       {skuDetailItem && (
@@ -3087,18 +2967,6 @@ export function Items() {
         onCancel={() => setBatchDeleteAiPromptConfirm(false)}
       />
 
-      {/* 批量清空关联卡券确认弹窗 */}
-      <ConfirmModal
-        isOpen={batchClearCardRelationsConfirm}
-        title="清空关联卡券确认"
-        message={`确定要清空选中的 ${selectedIds.size} 个商品的卡券关联关系吗？此操作不会删除卡券本身，仅解除关联。`}
-        confirmText="清空"
-        cancelText="取消"
-        type="danger"
-        loading={deleting}
-        onConfirm={handleBatchClearCardRelations}
-        onCancel={() => setBatchClearCardRelationsConfirm(false)}
-      />
     </div>
   )
 }

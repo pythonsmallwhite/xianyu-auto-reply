@@ -114,7 +114,7 @@ async def list_external_orders(
 
 @router.get("", response_model=ExternalApiResponse)
 async def get_external_orders(
-    secret_key: str | None = Query(default=None, description="分销秘钥"),
+    secret_key: str | None = Query(default=None, description="外部接口秘钥"),
     item_id: list[str] | None = Query(default=None, description="商品ID，可重复传入多个"),
     item_ids: list[str] | None = Query(default=None, description="商品ID，可重复传入或使用逗号分隔"),
     order_no: str | None = Query(default=None, description="订单号，精确查询"),

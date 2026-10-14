@@ -32,13 +32,11 @@ import {
   Share2,
   MessageCircle,
   Package,
-  Wallet,
   Search,
   Terminal,
   UserCog,
   Shield,
   Send,
-  Ticket,
   Ban,
   Sparkles,
   History,
@@ -73,7 +71,6 @@ export default function MineScreen() {
       items: [
         { label: '关键词管理', icon: MessageSquare, onPress: () => router.push('/(tabs)/mine/keywords') },
         { label: '消息过滤', icon: Filter, onPress: () => router.push('/(tabs)/mine/message-filters') },
-        { label: '卡券管理', icon: Ticket, onPress: () => router.push('/(tabs)/mine/cards') },
         { label: '黑名单管理', icon: Ban, onPress: () => router.push('/(tabs)/mine/blacklist') },
       ],
     },
@@ -95,9 +92,8 @@ export default function MineScreen() {
       ],
     },
     {
-      title: '分销与推广',
+      title: '商品与推广',
       items: [
-        { label: '分销管理', icon: Wallet, onPress: () => router.push('/(tabs)/mine/distribution') },
         { label: '爬虫任务', icon: Bug, onPress: () => router.push('/(tabs)/mine/crawler') },
         { label: '上新监控', icon: Radar, onPress: () => router.push('/(tabs)/mine/listing-monitor') },
         { label: '监控分类', icon: FolderTree, onPress: () => router.push('/(tabs)/mine/monitor-categories') },

@@ -1,7 +1,7 @@
 /**
  * 在线聊天工作台 - 右侧客户订单面板
  *
- * 展示当前会话对方买家的近期订单，并提供查看详情、取消订单、无物流发货、发卡发货等操作。
+ * 展示当前会话对方买家的近期订单，并提供查看详情、取消订单、无物流发货等操作。
  * 仅负责渲染与回调透传，数据与业务逻辑由父组件 ChatNew 维护。
  */
 import { Eye, Loader2, Package, RefreshCw, Truck, X } from 'lucide-react'
@@ -15,8 +15,6 @@ interface CustomerOrdersPanelProps {
   orders: CustomerOrder[]
   /** 订单列表加载中 */
   loading: boolean
-  /** 正在发卡发货的订单号 */
-  deliveringOrderNo: string
   /** 正在无物流发货的订单号 */
   confirmingOrderNo: string
   /** 正在取消的订单号 */
@@ -31,15 +29,12 @@ interface CustomerOrdersPanelProps {
   onCancel: (orderNo: string) => void
   /** 无物流发货 */
   onNoLogistics: (orderNo: string) => void
-  /** 发卡发货 */
-  onDeliver: (orderNo: string) => void
 }
 
 export function CustomerOrdersPanel({
   activeCid,
   orders,
   loading,
-  deliveringOrderNo,
   confirmingOrderNo,
   cancellingOrderNo,
   loadingOrderDetail,
@@ -47,9 +42,8 @@ export function CustomerOrdersPanel({
   onViewDetail,
   onCancel,
   onNoLogistics,
-  onDeliver,
 }: CustomerOrdersPanelProps) {
-  const anyActionRunning = !!deliveringOrderNo || !!confirmingOrderNo
+  const anyActionRunning = !!confirmingOrderNo
   return (
     <div className="basis-3/5 min-h-0 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 flex flex-col">
       <div className="p-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
@@ -91,12 +85,6 @@ export function CustomerOrdersPanel({
               <button onClick={() => onNoLogistics(order.order_no)} disabled={anyActionRunning} className="mt-2 w-full flex items-center justify-center gap-1 py-1.5 rounded bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed">
                 {confirmingOrderNo === order.order_no ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Truck className="w-3.5 h-3.5" />}
                 无物流发货
-              </button>
-            )}
-            {SHIPPABLE_STATUSES.includes(order.status) && (
-              <button onClick={() => onDeliver(order.order_no)} disabled={anyActionRunning || order.card_only_delivered} className="mt-1.5 w-full flex items-center justify-center gap-1 py-1.5 rounded border border-blue-300 text-blue-600 hover:bg-blue-50 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed">
-                {deliveringOrderNo === order.order_no ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Truck className="w-3.5 h-3.5" />}
-                {order.card_only_delivered ? '卡券已发送' : '发卡发货'}
               </button>
             )}
           </div>

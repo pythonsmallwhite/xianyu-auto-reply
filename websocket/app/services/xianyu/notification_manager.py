@@ -11,7 +11,6 @@
 import time
 import asyncio
 import hashlib
-from decimal import Decimal, InvalidOperation
 from loguru import logger
 
 from common.utils.notification_utils import (
@@ -152,102 +151,6 @@ class NotificationManager:
 
         except Exception as e:
             logger.error(f"📱 处理消息通知失败: {self._safe_str(e)}")
-
-    async def send_delivery_failure_notification(self, send_user_name: str, send_user_id: str,
-                                                  item_id: str, error_message: str, chat_id: str = None,
-                                                  order_id: str = None):
-        """发送自动发货结果通知。"""
-        try:
-            from common.db.compat import db_manager
-
-            # 检查消息过滤规则（跳过消息通知）
-            # 自动发货通知此前不走过滤，导致"发货成功"等结果无法被消息过滤屏蔽，此处补齐。
-            # 匹配对象为发货结果文本 error_message（即通知中的"结果"字段），
-            # 这样配置"发货成功"只屏蔽成功通知，失败通知的错误信息不含该关键词，仍正常发送。
-            try:
-                filter_keywords = db_manager.get_message_filter_keywords(self.cookie_id, 'skip_notify')
-                if filter_keywords:
-                    for keyword in filter_keywords:
-                        if keyword and keyword in (error_message or ''):
-                            logger.info(f"📱 【消息过滤】自动发货通知包含过滤关键词「{keyword}」，跳过通知")
-                            return
-            except Exception as e:
-                logger.warning(f"📱 检查自动发货通知过滤规则失败: {self._safe_str(e)}")
-
-            # 获取账号的通知配置
-            notifications = db_manager.get_account_notifications(self.cookie_id)
-            if not notifications:
-                logger.warning("未配置消息通知，跳过自动发货通知")
-                return
-
-            # 获取账号备注
-            remark = ""
-            try:
-                account_details = db_manager.get_cookie_details(self.cookie_id)
-                if account_details:
-                    remark = account_details.get("remark") or ""
-            except Exception as e:
-                logger.warning(f"获取账号详情失败: {e}")
-
-            buyer_nick = send_user_name or "未知"
-            amount = "未知"
-            quantity = "未知"
-            if order_id:
-                try:
-                    order = db_manager.get_order_by_id(order_id, account_id=self.cookie_id)
-                    if order:
-                        buyer_nick = (
-                            order.get("buyer_fish_nick")
-                            or order.get("buyer_nick")
-                            or buyer_nick
-                        )
-                        raw_amount = order.get("amount")
-                        if raw_amount is not None:
-                            amount = f"¥{Decimal(str(raw_amount)):.2f}"
-                        if order.get("quantity") is not None:
-                            quantity = str(order["quantity"])
-                except (InvalidOperation, ValueError, TypeError) as e:
-                    logger.warning(f"读取订单 {order_id} 的通知金额或数量失败: {self._safe_str(e)}")
-                except Exception as e:
-                    logger.warning(f"读取订单 {order_id} 的通知信息失败: {self._safe_str(e)}")
-
-            # 构建通知内容
-            account_desc = f"{self.cookie_id}({remark})" if remark else self.cookie_id
-            notification_message = f"🚨 自动发货通知\n\n" \
-                                 f"闲鱼账号: {account_desc}\n" \
-                                 f"买家: {buyer_nick} (ID: {send_user_id or '未知'})\n" \
-                                 f"订单金额: {amount}\n" \
-                                 f"购买数量: {quantity}\n" \
-                                 f"商品ID: {item_id or '未知'}\n" \
-                                 f"聊天ID: {chat_id or '未知'}\n" \
-                                 f"结果: {error_message}\n" \
-                                 f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n" \
-                                 f"请及时处理！"
-
-            # 发送通知到各渠道
-            await self._send_to_channels(
-                notifications,
-                notification_message,
-                template_type="delivery",
-                template_context={
-                    "account": account_desc,
-                    "account_id": self.cookie_id,
-                    "account_remark": remark or "未知",
-                    "buyer_nick": buyer_nick,
-                    "buyer_id": send_user_id or "未知",
-                    "message": "",
-                    "item_id": item_id or "未知",
-                    "chat_id": chat_id or "未知",
-                    "time": time.strftime('%Y-%m-%d %H:%M:%S'),
-                    "order_id": order_id or "未知",
-                    "amount": amount,
-                    "quantity": quantity,
-                    "result": error_message or "未知",
-                },
-            )
-
-        except Exception as e:
-            logger.error(f"发送自动发货通知异常: {self._safe_str(e)}")
 
     async def send_token_refresh_notification(self, error_message: str, notification_type: str = "token_refresh",
                                              chat_id: str = None, attachment_path: str = None, 

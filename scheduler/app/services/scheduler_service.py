@@ -15,7 +15,6 @@ from typing import Optional
 
 from loguru import logger
 
-from app.services.scheduler.redelivery_task import RedeliveryTask
 from app.services.scheduler.rate_task import RateTask
 from app.services.scheduler.polish_task import polish_task_service
 from app.services.scheduler.day_switch_task import day_switch_task_service
@@ -34,16 +33,13 @@ from app.services.scheduler.api_cookie_renew_task import api_cookie_renew_task_s
 from app.services.scheduler.close_notice_task import close_notice_task_service
 from app.services.scheduler.red_flower_task import RedFlowerTask
 from app.services.scheduler.db_backup_task import db_backup_task_service
-from app.services.scheduler.delivery_timeout_task import delivery_timeout_task_service
 from app.services.scheduler.listing_monitor_task import listing_monitor_task_service
 from app.services.scheduler.seller_fill_task import seller_fill_task_service
 from app.services.scheduler.dm_send_task import dm_send_task_service
 from app.services.scheduler.auto_order_task import auto_order_task_service
 from app.services.scheduler.image_cleanup_task import image_cleanup_task_service
-from app.services.scheduler.auto_relist_task import auto_relist_task_service
 from app.services.scheduled_task_service import (
     ScheduledTaskService,
-    TASK_CODE_REDELIVERY,
     TASK_CODE_RATE,
     TASK_CODE_POLISH,
     TASK_CODE_DAY_SWITCH,
@@ -60,13 +56,11 @@ from app.services.scheduled_task_service import (
     TASK_CODE_CLOSE_NOTICE,
     TASK_CODE_RED_FLOWER,
     TASK_CODE_DB_BACKUP,
-    TASK_CODE_DELIVERY_TIMEOUT,
     TASK_CODE_LISTING_MONITOR,
     TASK_CODE_SELLER_FILL,
     TASK_CODE_DM_SEND,
     TASK_CODE_AUTO_ORDER,
     TASK_CODE_IMAGE_CLEANUP,
-    TASK_CODE_AUTO_RELIST,
 )
 from common.db.session import async_session_maker
 
@@ -78,7 +72,6 @@ class SchedulerService:
     
     def __init__(self):
         self._running = False
-        self._redelivery_task_handle: Optional[asyncio.Task] = None
         self._rate_task_handle: Optional[asyncio.Task] = None
         self._polish_task_handle: Optional[asyncio.Task] = None
         self._day_switch_task_handle: Optional[asyncio.Task] = None
@@ -95,14 +88,11 @@ class SchedulerService:
         self._close_notice_task_handle: Optional[asyncio.Task] = None
         self._red_flower_task_handle: Optional[asyncio.Task] = None
         self._db_backup_task_handle: Optional[asyncio.Task] = None
-        self._delivery_timeout_task_handle: Optional[asyncio.Task] = None
         self._listing_monitor_task_handle: Optional[asyncio.Task] = None
         self._seller_fill_task_handle: Optional[asyncio.Task] = None
         self._dm_send_task_handle: Optional[asyncio.Task] = None
         self._auto_order_task_handle: Optional[asyncio.Task] = None
         self._image_cleanup_task_handle: Optional[asyncio.Task] = None
-        self._auto_relist_task_handle: Optional[asyncio.Task] = None
-        self._redelivery_task = RedeliveryTask()
         self._rate_task = RateTask()
         self._polish_task = polish_task_service
         self._day_switch_task = day_switch_task_service
@@ -119,13 +109,11 @@ class SchedulerService:
         self._close_notice_task = close_notice_task_service
         self._red_flower_task = RedFlowerTask()
         self._db_backup_task = db_backup_task_service
-        self._delivery_timeout_task = delivery_timeout_task_service
         self._listing_monitor_task = listing_monitor_task_service
         self._seller_fill_task = seller_fill_task_service
         self._dm_send_task = dm_send_task_service
         self._auto_order_task = auto_order_task_service
         self._image_cleanup_task = image_cleanup_task_service
-        self._auto_relist_task = auto_relist_task_service
     
     @classmethod
     def get_instance(cls) -> "SchedulerService":
@@ -154,12 +142,11 @@ class SchedulerService:
     
     async def reload_all_configs(self) -> None:
         """重新加载所有任务配置"""
-        for task_code in [TASK_CODE_REDELIVERY, TASK_CODE_RATE, TASK_CODE_POLISH, TASK_CODE_DAY_SWITCH, TASK_CODE_CLEANUP_BROWSER_DATA, TASK_CODE_CLEANUP_UNCONFIGURED_BROWSER_DATA, TASK_CODE_FETCH_ORDERS, TASK_CODE_FETCH_PENDING_ORDERS, TASK_CODE_FETCH_REFUND_ORDERS, TASK_CODE_FETCH_ITEMS, TASK_CODE_LOGIN_RENEW, TASK_CODE_TOKEN_RENEWAL, TASK_CODE_COOKIES_REFRESH, TASK_CODE_API_COOKIE_RENEW, TASK_CODE_CLOSE_NOTICE, TASK_CODE_RED_FLOWER, TASK_CODE_DB_BACKUP]:
+        for task_code in [TASK_CODE_RATE, TASK_CODE_POLISH, TASK_CODE_DAY_SWITCH, TASK_CODE_CLEANUP_BROWSER_DATA, TASK_CODE_CLEANUP_UNCONFIGURED_BROWSER_DATA, TASK_CODE_FETCH_ORDERS, TASK_CODE_FETCH_PENDING_ORDERS, TASK_CODE_FETCH_REFUND_ORDERS, TASK_CODE_FETCH_ITEMS, TASK_CODE_LOGIN_RENEW, TASK_CODE_TOKEN_RENEWAL, TASK_CODE_COOKIES_REFRESH, TASK_CODE_API_COOKIE_RENEW, TASK_CODE_CLOSE_NOTICE, TASK_CODE_RED_FLOWER, TASK_CODE_DB_BACKUP]:
             await self.reload_task_config(task_code)
-        for task_code in [TASK_CODE_DELIVERY_TIMEOUT, TASK_CODE_LISTING_MONITOR, TASK_CODE_SELLER_FILL, TASK_CODE_DM_SEND, TASK_CODE_AUTO_ORDER]:
+        for task_code in [TASK_CODE_LISTING_MONITOR, TASK_CODE_SELLER_FILL, TASK_CODE_DM_SEND, TASK_CODE_AUTO_ORDER]:
             await self.reload_task_config(task_code)
         await self.reload_task_config(TASK_CODE_IMAGE_CLEANUP)
-        await self.reload_task_config(TASK_CODE_AUTO_RELIST)
     
     def start(self) -> None:
         """启动定时任务"""
@@ -169,7 +156,6 @@ class SchedulerService:
         
         self._running = True
         # 启动任务循环
-        self._redelivery_task_handle = asyncio.create_task(self._run_redelivery_loop())
         self._rate_task_handle = asyncio.create_task(self._run_rate_loop())
         self._polish_task_handle = asyncio.create_task(self._run_polish_loop())
         self._day_switch_task_handle = asyncio.create_task(self._run_day_switch_loop())
@@ -186,13 +172,11 @@ class SchedulerService:
         self._close_notice_task_handle = asyncio.create_task(self._run_close_notice_loop())
         self._red_flower_task_handle = asyncio.create_task(self._run_red_flower_loop())
         self._db_backup_task_handle = asyncio.create_task(self._run_db_backup_loop())
-        self._delivery_timeout_task_handle = asyncio.create_task(self._run_delivery_timeout_loop())
         self._listing_monitor_task_handle = asyncio.create_task(self._run_listing_monitor_loop())
         self._seller_fill_task_handle = asyncio.create_task(self._run_seller_fill_loop())
         self._dm_send_task_handle = asyncio.create_task(self._run_dm_send_loop())
         self._auto_order_task_handle = asyncio.create_task(self._run_auto_order_loop())
         self._image_cleanup_task_handle = asyncio.create_task(self._run_image_cleanup_loop())
-        self._auto_relist_task_handle = asyncio.create_task(self._run_auto_relist_loop())
         logger.info("[定时任务调度] 已启动")
     
     def stop(self) -> None:
@@ -202,9 +186,6 @@ class SchedulerService:
             return
         
         self._running = False
-        if self._redelivery_task_handle:
-            self._redelivery_task_handle.cancel()
-            self._redelivery_task_handle = None
         if self._rate_task_handle:
             self._rate_task_handle.cancel()
             self._rate_task_handle = None
@@ -253,9 +234,6 @@ class SchedulerService:
         if self._db_backup_task_handle:
             self._db_backup_task_handle.cancel()
             self._db_backup_task_handle = None
-        if self._delivery_timeout_task_handle:
-            self._delivery_timeout_task_handle.cancel()
-            self._delivery_timeout_task_handle = None
         if self._listing_monitor_task_handle:
             self._listing_monitor_task_handle.cancel()
             self._listing_monitor_task_handle = None
@@ -271,14 +249,10 @@ class SchedulerService:
         if self._image_cleanup_task_handle:
             self._image_cleanup_task_handle.cancel()
             self._image_cleanup_task_handle = None
-        if self._auto_relist_task_handle:
-            self._auto_relist_task_handle.cancel()
-            self._auto_relist_task_handle = None
         logger.info("[定时任务调度] 已停止")
     
     def get_task_status(self) -> dict:
         """获取所有任务的运行状态"""
-        redelivery_config = ScheduledTaskService.get_cached_config(TASK_CODE_REDELIVERY)
         rate_config = ScheduledTaskService.get_cached_config(TASK_CODE_RATE)
         polish_config = ScheduledTaskService.get_cached_config(TASK_CODE_POLISH)
         day_switch_config = ScheduledTaskService.get_cached_config(TASK_CODE_DAY_SWITCH)
@@ -295,24 +269,15 @@ class SchedulerService:
         close_notice_config = ScheduledTaskService.get_cached_config(TASK_CODE_CLOSE_NOTICE)
         red_flower_config = ScheduledTaskService.get_cached_config(TASK_CODE_RED_FLOWER)
         db_backup_config = ScheduledTaskService.get_cached_config(TASK_CODE_DB_BACKUP)
-        delivery_timeout_config = ScheduledTaskService.get_cached_config(TASK_CODE_DELIVERY_TIMEOUT)
         listing_monitor_config = ScheduledTaskService.get_cached_config(TASK_CODE_LISTING_MONITOR)
         seller_fill_config = ScheduledTaskService.get_cached_config(TASK_CODE_SELLER_FILL)
         dm_send_config = ScheduledTaskService.get_cached_config(TASK_CODE_DM_SEND)
         auto_order_config = ScheduledTaskService.get_cached_config(TASK_CODE_AUTO_ORDER)
         image_cleanup_config = ScheduledTaskService.get_cached_config(TASK_CODE_IMAGE_CLEANUP)
-        auto_relist_config = ScheduledTaskService.get_cached_config(TASK_CODE_AUTO_RELIST)
         
         return {
             "running": self._running,
             "tasks": {
-                TASK_CODE_REDELIVERY: {
-                    "config": redelivery_config or {"interval_seconds": 5, "enabled": True},
-                    "task_running": (
-                        self._redelivery_task_handle is not None 
-                        and not self._redelivery_task_handle.done()
-                    ),
-                },
                 TASK_CODE_RATE: {
                     "config": rate_config or {"interval_seconds": 20, "enabled": True},
                     "task_running": (
@@ -425,13 +390,6 @@ class SchedulerService:
                         and not self._db_backup_task_handle.done()
                     ),
                 },
-                TASK_CODE_DELIVERY_TIMEOUT: {
-                    "config": delivery_timeout_config or {"interval_seconds": 60, "enabled": True},
-                    "task_running": (
-                        self._delivery_timeout_task_handle is not None
-                        and not self._delivery_timeout_task_handle.done()
-                    ),
-                },
                 TASK_CODE_LISTING_MONITOR: {
                     "config": listing_monitor_config or {"interval_seconds": 60, "enabled": True},
                     "task_running": (
@@ -467,13 +425,6 @@ class SchedulerService:
                         and not self._image_cleanup_task_handle.done()
                     ),
                 },
-                TASK_CODE_AUTO_RELIST: {
-                    "config": auto_relist_config or {"interval_seconds": 30, "enabled": True},
-                    "task_running": (
-                        self._auto_relist_task_handle is not None
-                        and not self._auto_relist_task_handle.done()
-                    ),
-                },
             }
         }
     
@@ -484,10 +435,7 @@ class SchedulerService:
         Args:
             task_code: 任务代码
         """
-        if task_code == TASK_CODE_REDELIVERY:
-            logger.info("[定时任务调度] 手动触发补发货任务")
-            await self._redelivery_task.execute()
-        elif task_code == TASK_CODE_RATE:
+        if task_code == TASK_CODE_RATE:
             logger.info("[定时任务调度] 手动触发补评价任务")
             await self._rate_task.execute()
         elif task_code == TASK_CODE_POLISH:
@@ -535,9 +483,6 @@ class SchedulerService:
         elif task_code == TASK_CODE_DB_BACKUP:
             logger.info("[定时任务调度] 手动触发数据库备份任务")
             await self._db_backup_task.execute()
-        elif task_code == TASK_CODE_DELIVERY_TIMEOUT:
-            logger.info("[定时任务调度] 手动触发发货超时检测任务")
-            await self._delivery_timeout_task.execute()
         elif task_code == TASK_CODE_LISTING_MONITOR:
             logger.info("[定时任务调度] 手动触发商品监控任务")
             await self._listing_monitor_task.execute(force=True, trigger_type="manual")
@@ -553,47 +498,8 @@ class SchedulerService:
         elif task_code == TASK_CODE_IMAGE_CLEANUP:
             logger.info("[定时任务调度] 手动触发图片清理任务")
             await self._image_cleanup_task.execute()
-        elif task_code == TASK_CODE_AUTO_RELIST:
-            logger.info("[定时任务调度] [自动续售] 手动触发商品自动续售任务")
-            try:
-                await self._auto_relist_task.execute()
-            finally:
-                logger.info("[定时任务调度] [自动续售] 手动触发商品自动续售任务结束")
         else:
             logger.warning(f"[定时任务调度] 未知的任务代码: {task_code}")
-    
-    async def _run_redelivery_loop(self) -> None:
-        """补发货任务执行循环"""
-        logger.info("[定时任务调度] 补发货任务循环开始")
-        
-        # 初始加载配置
-        await self.reload_task_config(TASK_CODE_REDELIVERY)
-        
-        while self._running:
-            config = ScheduledTaskService.get_cached_config(TASK_CODE_REDELIVERY)
-            if not config:
-                config = {"interval_seconds": 5, "enabled": True}
-            
-            interval = config.get("interval_seconds", 5)
-            enabled = config.get("enabled", True)
-            
-            if enabled:
-                try:
-                    await self._redelivery_task.execute()
-                except asyncio.CancelledError:
-                    logger.info("[定时任务调度] 补发货任务被取消")
-                    break
-                except Exception as e:
-                    logger.error(f"[定时任务调度] 补发货任务执行异常: {e}")
-            
-            # 等待下一次执行
-            try:
-                await asyncio.sleep(interval)
-            except asyncio.CancelledError:
-                logger.info("[定时任务调度] 补发货任务等待被取消")
-                break
-        
-        logger.info("[定时任务调度] 补发货任务循环结束")
     
     async def _run_rate_loop(self) -> None:
         """补评价任务执行循环"""
@@ -1120,39 +1026,6 @@ class SchedulerService:
 
         logger.info("[定时任务调度] 数据库备份任务循环结束")
 
-    async def _run_delivery_timeout_loop(self) -> None:
-        """发货超时检测任务执行循环"""
-        logger.info("[定时任务调度] 发货超时检测任务循环开始")
-
-        # 初始加载配置
-        await self.reload_task_config(TASK_CODE_DELIVERY_TIMEOUT)
-
-        while self._running:
-            config = ScheduledTaskService.get_cached_config(TASK_CODE_DELIVERY_TIMEOUT)
-            if not config:
-                config = {"interval_seconds": 60, "enabled": True}
-
-            interval = config.get("interval_seconds", 60)
-            enabled = config.get("enabled", True)
-
-            if enabled:
-                try:
-                    await self._delivery_timeout_task.execute()
-                except asyncio.CancelledError:
-                    logger.info("[定时任务调度] 发货超时检测任务被取消")
-                    break
-                except Exception as e:
-                    logger.error(f"[定时任务调度] 发货超时检测任务执行异常: {e}")
-
-            # 等待下一次执行
-            try:
-                await asyncio.sleep(interval)
-            except asyncio.CancelledError:
-                logger.info("[定时任务调度] 发货超时检测任务等待被取消")
-                break
-
-        logger.info("[定时任务调度] 发货超时检测任务循环结束")
-
     async def _run_listing_monitor_loop(self) -> None:
         """商品监控任务执行循环"""
         logger.info("[定时任务调度] 商品监控任务循环开始")
@@ -1317,33 +1190,6 @@ class SchedulerService:
                 break
 
         logger.info("[定时任务调度] 图片清理任务循环结束")
-
-    async def _run_auto_relist_loop(self) -> None:
-        """商品自动续售唯一 runner 循环。"""
-        logger.info("[定时任务调度] [自动续售] 商品自动续售任务循环开始")
-        await self.reload_task_config(TASK_CODE_AUTO_RELIST)
-        while self._running:
-            config = ScheduledTaskService.get_cached_config(TASK_CODE_AUTO_RELIST) or {
-                "interval_seconds": 30,
-                "enabled": True,
-            }
-            if config.get("enabled", True):
-                logger.info("[定时任务调度] [自动续售] 商品自动续售任务本轮开始")
-                try:
-                    await self._auto_relist_task.execute()
-                except asyncio.CancelledError:
-                    logger.info("[定时任务调度] [自动续售] 商品自动续售任务被取消")
-                    break
-                except Exception as exc:
-                    logger.error(f"[定时任务调度] [自动续售] 商品自动续售任务执行异常: {exc}")
-                finally:
-                    logger.info("[定时任务调度] [自动续售] 商品自动续售任务本轮结束")
-            try:
-                await asyncio.sleep(max(5, int(config.get("interval_seconds", 30))))
-            except asyncio.CancelledError:
-                break
-        logger.info("[定时任务调度] [自动续售] 商品自动续售任务循环结束")
-
 
 # 全局实例获取函数
 def get_scheduler_service() -> SchedulerService:

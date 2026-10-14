@@ -31,7 +31,7 @@ import {
   type CustomerOrder,
   type QuickPhrase,
 } from '@/api/chatNew'
-import { cancelOrder, fetchXianyuOrders, getOrderDetail, manualDelivery, noLogisticsDelivery, type OrderDetail } from '@/api/orders'
+import { cancelOrder, fetchXianyuOrders, getOrderDetail, noLogisticsDelivery, type OrderDetail } from '@/api/orders'
 import { useChatNewWs } from './useChatNewWs'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { CustomerOrdersPanel } from './CustomerOrdersPanel'
@@ -94,7 +94,6 @@ export function ChatNew() {
   // 当前客户订单与快捷短语
   const [customerOrders, setCustomerOrders] = useState<CustomerOrder[]>([])
   const [loadingOrders, setLoadingOrders] = useState(false)
-  const [deliveringOrderNo, setDeliveringOrderNo] = useState('')
   const [confirmingOrderNo, setConfirmingOrderNo] = useState('')
   const [cancellingOrderNo, setCancellingOrderNo] = useState('')
   const [orderDetail, setOrderDetail] = useState<OrderDetail | null>(null)
@@ -908,21 +907,6 @@ export function ChatNew() {
     }
   }
 
-  const handleDeliverOrder = async (orderNo: string) => {
-    if (!(await requestConfirm({ message: `确认立即发货订单 ${orderNo} 吗？`, confirmText: '发货' }))) return
-    setDeliveringOrderNo(orderNo)
-    try {
-      const res = await manualDelivery(orderNo)
-      addToast({ message: res.message || (res.success ? '发货成功' : '发货失败'), type: res.success ? 'success' : 'error' })
-      await loadCustomerOrders()
-    } catch (e: any) {
-      addToast({ message: e.message || '发货失败', type: 'error' })
-    } finally {
-      setDeliveringOrderNo('')
-    }
-  }
-
-
   // 消息变化时自动滚动到底部
   const handleNoLogisticsDelivery = async (orderNo: string) => {
     if (!(await requestConfirm({ message: `确认将订单 ${orderNo} 标记为无物流发货吗？`, confirmText: '无物流发货' }))) return
@@ -1698,7 +1682,6 @@ export function ChatNew() {
           activeCid={activeCid}
           orders={customerOrders}
           loading={loadingOrders}
-          deliveringOrderNo={deliveringOrderNo}
           confirmingOrderNo={confirmingOrderNo}
           cancellingOrderNo={cancellingOrderNo}
           loadingOrderDetail={loadingOrderDetail}
@@ -1706,7 +1689,6 @@ export function ChatNew() {
           onViewDetail={handleViewOrderDetail}
           onCancel={handleCancelOrder}
           onNoLogistics={handleNoLogisticsDelivery}
-          onDeliver={handleDeliverOrder}
         />
         <QuickPhrasesPanel
           phrases={quickPhrases}

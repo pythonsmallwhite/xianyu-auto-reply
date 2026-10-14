@@ -11,7 +11,7 @@ import {
   stopCrawler,
   type CrawlerJob,
   type CrawlerItem,
-} from '@/api/wrappers/distribution';
+} from '@/api/wrappers/crawler';
 
 /** 运行中状态：可停止、不可再次启动 */
 function isRunning(status: string): boolean {

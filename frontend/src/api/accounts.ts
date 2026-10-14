@@ -24,7 +24,6 @@ export const getAccountDetails = async (): Promise<AccountDetail[]> => {
     id: item.id,
     cookie: '',
     enabled: item.enabled,
-    auto_confirm: false,
     note: item.remark,
     show_browser: item.show_browser,
     remaining_publish_capacity: item.remaining_publish_capacity ?? null,
@@ -38,10 +37,8 @@ export const getAccountDetails = async (): Promise<AccountDetail[]> => {
 export interface AccountFilterParams {
   status?: 'active' | 'inactive' | null  // 状态筛选
   ai_reply?: boolean | null              // AI回复开关
-  scheduled_redelivery?: boolean | null  // 定时补发货
   scheduled_rate?: boolean | null        // 定时补评价
   auto_polish?: boolean | null           // 商品擦亮
-  auto_confirm?: boolean | null          // 自动确认收货
   has_password?: boolean | null          // 是否配置密码
   online?: boolean | null                // 在线状态（true=在线/false=离线）
   disable_reason?: string | null         // 禁用原因关键词（模糊搜索）
@@ -67,21 +64,10 @@ export const getAccountDetailsPaginated = async (
     value: string
     enabled: boolean
     online?: boolean
-    auto_confirm: boolean
-    scheduled_redelivery?: boolean
     scheduled_rate?: boolean
     auto_polish?: boolean
-    confirm_before_send?: boolean
-    send_before_confirm?: boolean
-    only_send_card?: boolean
     auto_red_flower?: boolean
     ai_reply_block_ordered_users?: boolean
-    delivery_disabled?: boolean
-    delivery_disabled_reason?: string
-    auto_close_order?: boolean
-    delivery_only_card_after_close?: boolean
-    // 禁止发货排除商品列表（命中此列表的 item_id 不受禁止发货拦截）
-    delivery_disabled_excluded_item_ids?: string[]
     remark?: string
     pause_duration?: number
     message_expire_time?: number
@@ -110,10 +96,8 @@ export const getAccountDetailsPaginated = async (
   if (filters) {
     if (filters.status) params.append('status', filters.status)
     if (filters.ai_reply !== null && filters.ai_reply !== undefined) params.append('ai_reply', String(filters.ai_reply))
-    if (filters.scheduled_redelivery !== null && filters.scheduled_redelivery !== undefined) params.append('scheduled_redelivery', String(filters.scheduled_redelivery))
     if (filters.scheduled_rate !== null && filters.scheduled_rate !== undefined) params.append('scheduled_rate', String(filters.scheduled_rate))
     if (filters.auto_polish !== null && filters.auto_polish !== undefined) params.append('auto_polish', String(filters.auto_polish))
-    if (filters.auto_confirm !== null && filters.auto_confirm !== undefined) params.append('auto_confirm', String(filters.auto_confirm))
     if (filters.has_password !== null && filters.has_password !== undefined) params.append('has_password', String(filters.has_password))
     if (filters.online !== null && filters.online !== undefined) params.append('online', String(filters.online))
     // 禁用原因：模糊搜索关键词，去除前后空白后再判断是否传参，避免发送空字符串
@@ -146,23 +130,10 @@ export const getAccountDetailsPaginated = async (
       cookie: item.value,
       enabled: item.enabled,
       online: item.online ?? false,
-      auto_confirm: item.auto_confirm,
-      scheduled_redelivery: item.scheduled_redelivery || false,
       scheduled_rate: item.scheduled_rate || false,
       auto_polish: item.auto_polish || false,
-      confirm_before_send: item.confirm_before_send || false,
-      send_before_confirm: item.send_before_confirm || false,
-      only_send_card: item.only_send_card || false,
       auto_red_flower: item.auto_red_flower || false,
       ai_reply_block_ordered_users: item.ai_reply_block_ordered_users || false,
-      delivery_disabled: item.delivery_disabled || false,
-      delivery_disabled_reason: item.delivery_disabled_reason || '',
-      auto_close_order: item.auto_close_order || false,
-      delivery_only_card_after_close: item.delivery_only_card_after_close || false,
-      // 后端返回可能为 undefined（旧数据），默认空数组表示未配置排除商品
-      delivery_disabled_excluded_item_ids: Array.isArray(item.delivery_disabled_excluded_item_ids)
-        ? item.delivery_disabled_excluded_item_ids
-        : [],
       note: item.remark,
       pause_duration: item.pause_duration,
       message_expire_time: item.message_expire_time,
@@ -267,11 +238,6 @@ export const resolveAccountPublishReservation = (
   { outcome, item_id: itemId || null }
 )
 
-// 更新账号自动确认设置
-export const updateAccountAutoConfirm = (id: string, autoConfirm: boolean): Promise<ApiResponse> => {
-  return put(`${COOKIE_PREFIX}/${id}/auto-confirm`, { auto_confirm: autoConfirm })
-}
-
 // 更新账号暂停时间
 export const updateAccountPauseDuration = (id: string, pauseDuration: number): Promise<ApiResponse> => {
   return put(`${COOKIE_PREFIX}/${id}/pause-duration`, { pause_duration: pauseDuration })
@@ -287,11 +253,6 @@ export const updateAccountReplyDelay = (id: string, replyDelaySeconds: number): 
   return put(`${COOKIE_PREFIX}/${id}/reply-delay`, { reply_delay_seconds: replyDelaySeconds })
 }
 
-// 更新定时补发货开关
-export const updateAccountScheduledRedelivery = (id: string, scheduledRedelivery: boolean): Promise<ApiResponse> => {
-  return put(`${COOKIE_PREFIX}/${id}/scheduled-redelivery`, { scheduled_redelivery: scheduledRedelivery })
-}
-
 // 更新定时补评价开关
 export const updateAccountScheduledRate = (id: string, scheduledRate: boolean): Promise<ApiResponse> => {
   return put(`${COOKIE_PREFIX}/${id}/scheduled-rate`, { scheduled_rate: scheduledRate })
@@ -302,22 +263,6 @@ export const updateAccountAutoPolish = (id: string, autoPolish: boolean): Promis
   return put(`${COOKIE_PREFIX}/${id}/auto-polish`, { auto_polish: autoPolish })
 }
 
-// 更新发货成功再发卡券开关
-export const updateAccountConfirmBeforeSend = (id: string, confirmBeforeSend: boolean): Promise<ApiResponse> => {
-  return put(`${COOKIE_PREFIX}/${id}/confirm-before-send`, { confirm_before_send: confirmBeforeSend })
-}
-
-// 更新卡券发送成功再确认发货开关
-export const updateAccountSendBeforeConfirm = (id: string, sendBeforeConfirm: boolean): Promise<ApiResponse> => {
-  return put(`${COOKIE_PREFIX}/${id}/send-before-confirm`, { send_before_confirm: sendBeforeConfirm })
-}
-
-// 更新只发卡券、不确认发货开关
-export const updateAccountOnlySendCard = (id: string, onlySendCard: boolean): Promise<ApiResponse> => {
-  return put(`${COOKIE_PREFIX}/${id}/only-send-card`, { only_send_card: onlySendCard })
-}
-
-
 // 更新自动求小红花开关
 export const updateAccountAutoRedFlower = (id: string, autoRedFlower: boolean): Promise<ApiResponse> => {
   return put(`${COOKIE_PREFIX}/${id}/auto-red-flower`, { auto_red_flower: autoRedFlower })
@@ -326,50 +271,6 @@ export const updateAccountAutoRedFlower = (id: string, autoRedFlower: boolean): 
 // 更新已下单用户禁止AI回复开关
 export const updateAccountAiReplyBlockOrderedUsers = (id: string, aiReplyBlockOrderedUsers: boolean): Promise<ApiResponse> => {
   return put(`${COOKIE_PREFIX}/${id}/ai-reply-block-ordered-users`, { ai_reply_block_ordered_users: aiReplyBlockOrderedUsers })
-}
-
-// ==================== 禁止发货规则 ====================
-
-// 禁止发货规则项类型
-export interface DeliveryBlockRuleItem {
-  rule_code: string
-  rule_name: string
-  rule_description: string
-  enabled: boolean
-  priority: number
-  block_reason: string
-  auto_close_order: boolean
-  only_card_after_close: boolean
-  excluded_item_ids: string[]
-  config: Record<string, any>
-  default_config: Record<string, any>
-}
-
-// 获取账号的禁止发货规则列表
-export const getDeliveryBlockRules = (id: string): Promise<ApiResponse<DeliveryBlockRuleItem[]>> => {
-  return get(`${COOKIE_PREFIX}/${id}/delivery-block-rules`)
-}
-
-// 批量更新账号的禁止发货规则配置
-export const updateDeliveryBlockRules = (
-  id: string,
-  rules: Array<{
-    rule_code: string
-    enabled: boolean
-    priority: number
-    block_reason: string | null
-    auto_close_order: boolean
-    only_card_after_close: boolean
-    excluded_item_ids: string[]
-    config: Record<string, any> | null
-  }>,
-): Promise<ApiResponse> => {
-  return put(`${COOKIE_PREFIX}/${id}/delivery-block-rules`, { rules })
-}
-
-// 获取所有可用的禁止发货规则类型
-export const getAvailableDeliveryBlockRules = (): Promise<ApiResponse> => {
-  return get(`${COOKIE_PREFIX}/delivery-block-rules/available`)
 }
 
 // 更新账号登录信息（用户名、密码、是否显示浏览器）
@@ -616,77 +517,6 @@ export const updateProxyConfig = (accountId: string, config: ProxyConfig): Promi
 // 清除代理配置
 export const clearProxyConfig = (accountId: string): Promise<ProxyConfigResponse> => {
   return del(`${PROXY_PREFIX}/${accountId}`)
-}
-
-// ==================== 退款订单注销配置 ====================
-
-const REFUND_CANCEL_PREFIX = '/api/v1/refund-cancel'
-
-export interface RefundCancelConfig {
-  enabled: boolean      // 是否开启退款订单注销
-  url?: string | null   // 注销接口请求URL
-  timeout?: number      // 请求超时时间(秒)
-}
-
-export interface RefundCancelConfigResponse {
-  success: boolean
-  message?: string
-  data?: RefundCancelConfig
-}
-
-// 获取退款订单注销配置
-export const getRefundCancelConfig = (accountId: string): Promise<RefundCancelConfigResponse> => {
-  return get(`${REFUND_CANCEL_PREFIX}/${accountId}`)
-}
-
-// 更新退款订单注销配置
-export const updateRefundCancelConfig = (accountId: string, config: RefundCancelConfig): Promise<RefundCancelConfigResponse> => {
-  return put(`${REFUND_CANCEL_PREFIX}/${accountId}`, config)
-}
-
-// ==================== 同意后发货配置 ====================
-
-const AGREE_DELIVER_PREFIX = '/api/v1/agree-deliver'
-
-export interface AgreeDeliverConfig {
-  enabled: boolean                 // 是否开启同意后发货
-  notify_message?: string | null   // 通知用户信息（文本域）
-  pickup_url?: string | null       // 提货URL
-}
-
-export interface AgreeDeliverConfigResponse {
-  success: boolean
-  message?: string
-  data?: AgreeDeliverConfig
-}
-
-// 获取同意后发货配置
-export const getAgreeDeliverConfig = (accountId: string): Promise<AgreeDeliverConfigResponse> => {
-  return get(`${AGREE_DELIVER_PREFIX}/${accountId}`)
-}
-
-// 更新同意后发货配置
-export const updateAgreeDeliverConfig = (accountId: string, config: AgreeDeliverConfig): Promise<AgreeDeliverConfigResponse> => {
-  return put(`${AGREE_DELIVER_PREFIX}/${accountId}`, config)
-}
-
-// 本系统提货页地址推荐（供「提货URL」填写提示）
-export interface PickupUrlSuggestion {
-  pickup_url: string    // 推荐填写的提货URL
-  warning: string       // 需要注意的提示（为空表示可直接使用）
-  env_name: string      // 公网部署需配置的环境变量名
-  example_url: string   // 买家最终收到的完整链接示例
-}
-
-export interface PickupUrlSuggestionResponse {
-  success: boolean
-  message?: string
-  data?: PickupUrlSuggestion
-}
-
-// 获取本系统提货页地址推荐
-export const getPickupUrlSuggestion = (): Promise<PickupUrlSuggestionResponse> => {
-  return get(`${AGREE_DELIVER_PREFIX}/pickup-url/suggestion`)
 }
 
 // ==================== 人脸验证相关 ====================

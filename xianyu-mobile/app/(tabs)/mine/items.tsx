@@ -16,12 +16,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Card, EmptyState, Badge, Loading, Button } from '@/components/ui';
-import { Package, Ticket } from 'lucide-react-native';
+import { Package } from 'lucide-react-native';
 import { colors, spacing, typography, radius } from '@/lib/theme';
 import { getXianyuItems, type XianyuItem } from '@/api/wrappers/items';
 import { batchDeleteItems } from '@/api/wrappers/item-edit';
 import { getAccountOptions, type AccountOption } from '@/api/wrappers/accounts';
-import { ItemCardRelationModal } from '@/components/card-relation/ItemCardRelationModal';
 
 const PAGE_SIZE = 20;
 
@@ -45,9 +44,6 @@ export default function ItemsScreen() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 关联卡券弹窗：当前正在关联卡券的商品，非空即表示弹窗打开
-  const [relationItem, setRelationItem] = useState<XianyuItem | null>(null);
-
   // 筛选在事件中立即失效旧请求，序号同时保护响应、错误和加载状态。
   const reqSeqRef = useRef(0);
   const filtersRef = useRef({ accountId: '', showHistory: false });
@@ -66,7 +62,6 @@ export default function ItemsScreen() {
     setLoading(true);
     setRefreshing(false);
     setLoadingMore(false);
-    setRelationItem(null);
     setSelectedAccountId(accountId);
     setShowHistory(history);
   };
@@ -285,16 +280,6 @@ export default function ItemsScreen() {
             </View>
           </View>
         </View>
-        {(item.source_category === 'managed' || item.source_category === 'tool_published_unlinked') && <Pressable
-          onPress={() => { if (canOperate(item)) setRelationItem(item); }}
-          style={({ pressed }) => [
-            styles.actionRow,
-            { borderColor: c.borderLight, opacity: pressed ? 0.6 : 1 },
-          ]}
-        >
-          <Ticket size={14} stroke={c.primary} />
-          <Text style={[styles.actionText, { color: c.primary }]}>关联卡券</Text>
-        </Pressable>}
       </Card>
     </Pressable>
   );
@@ -393,13 +378,6 @@ export default function ItemsScreen() {
         }
       />
 
-      {/* 商品 → 关联卡券弹窗 */}
-      <ItemCardRelationModal
-        itemId={relationItem?.item_id ?? ''}
-        itemName={relationItem?.title ?? ''}
-        visible={!!relationItem}
-        onClose={() => setRelationItem(null)}
-      />
     </SafeAreaView>
   );
 }
@@ -441,17 +419,6 @@ const styles = StyleSheet.create({
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
   price: { ...typography.caption, fontWeight: '700' },
   qty: { ...typography.small },
-  actionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    marginTop: spacing.sm,
-    paddingTop: spacing.sm,
-    borderTopWidth: 1,
-    alignSelf: 'flex-end',
-    paddingHorizontal: spacing.xs,
-  },
-  actionText: { ...typography.small, fontWeight: '600' },
   footer: { paddingVertical: spacing.lg, alignItems: 'center' },
   footerText: { ...typography.small, textAlign: 'center', paddingVertical: spacing.md },
 });

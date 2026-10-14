@@ -22,15 +22,11 @@ export interface OrderListResponse {
   total_pages: number
 }
 
-// 手动发货响应类型
-export interface ManualDeliveryResponse {
+// 订单操作（无物流发货）响应类型
+export interface OrderActionResponse {
   success: boolean
   message: string
-  data?: {
-    order_no: string
-    card_name: string
-    card_type: string
-  }
+  data?: Record<string, unknown>
 }
 
 export interface FetchXianyuOrdersResponse {
@@ -54,7 +50,6 @@ export interface OrderFilterParams {
   is_rated?: boolean | null        // 是否已评价
   start_date?: string | null       // 开始日期：YYYY-MM-DD
   end_date?: string | null         // 结束日期：YYYY-MM-DD
-  delivery_send_status?: string | null  // 关联消息日志发送状态：success/failed/unknown
 }
 
 // 获取订单列表（分页）
@@ -90,9 +85,6 @@ export const getOrders = (
     if (filters.end_date) {
       params.append('end_date', filters.end_date)
     }
-    if (filters.delivery_send_status !== null && filters.delivery_send_status !== undefined && filters.delivery_send_status !== '') {
-      params.append('delivery_send_status', filters.delivery_send_status)
-    }
   }
   
   return get(`${ORDER_PREFIX}?${params.toString()}`)
@@ -108,13 +100,8 @@ export const deleteOrder = (id: string): Promise<ApiResponse> => {
   return del(`${ORDER_PREFIX}/${id}`)
 }
 
-// 手动发货
-export const manualDelivery = (orderNo: string): Promise<ManualDeliveryResponse> => {
-  return post(`${ORDER_PREFIX}/manual-delivery`, { order_no: orderNo })
-}
-
-// 获取闲鱼订单并同步到数据库（单独设置10分钟超时）
-export const noLogisticsDelivery = (orderNo: string): Promise<ManualDeliveryResponse> => {
+// 无物流发货：仅在闲鱼确认发货，不发送任何聊天内容
+export const noLogisticsDelivery = (orderNo: string): Promise<OrderActionResponse> => {
   return post(`${ORDER_PREFIX}/no-logistics-delivery`, { order_no: orderNo })
 }
 

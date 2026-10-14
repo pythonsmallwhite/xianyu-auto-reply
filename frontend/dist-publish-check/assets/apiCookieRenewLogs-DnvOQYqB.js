@@ -1,0 +1,1 @@
+import{c as a}from"./batchLogFactory-BT6Abd0e.js";const e=a({batches:"api-cookie-renew-batches",clearLogs:"api-cookie-renew-logs/clear"}),c=e.getBatches,t=e.getBatchDetail,s=e.clearLogs;export{t as a,s as c,c as g};

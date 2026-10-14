@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Navigate } from 'react-router-dom'
-import { Settings as SettingsIcon, Save, Mail, RefreshCw, Eye, EyeOff, Copy, Percent, CreditCard, Globe, CalendarClock } from 'lucide-react'
+import { Settings as SettingsIcon, Save, Mail, RefreshCw, Eye, EyeOff, Copy, Globe } from 'lucide-react'
 import {
   buildHiddenMenuSettingsPayload,
   getHiddenMenuKeysFromSettings,
@@ -11,7 +11,6 @@ import {
   updateDisclaimerSettings,
   updateLoginBrandingSettings,
   updateProxySettings,
-  updateDistributionSettings,
   updateThemeAppearanceSettings,
   updateThemeFontSettings,
   testEmailSend,
@@ -57,17 +56,10 @@ export function Settings() {
   const [themeFontSaving, setThemeFontSaving] = useState(false)
   // 代理设置独立保存状态：与页面右上角"保存设置"按钮的 saving 分离，互不影响
   const [proxySaving, setProxySaving] = useState(false)
-  // 分销设置独立保存状态：与页面右上角"保存设置"按钮的 saving 分离，互不影响
-  const [distributionSaving, setDistributionSaving] = useState(false)
-  // 用户到期/续期设置独立保存状态
-  const [userExpirySaving, setUserExpirySaving] = useState(false)
   const [settings, setSettings] = useState<SystemSettings | null>(null)
 
   // SMTP密码显示状态
   const [showSmtpPassword, setShowSmtpPassword] = useState(false)
-  // 支付宝密钥显示状态
-  const [showAlipayPrivateKey, setShowAlipayPrivateKey] = useState(false)
-  const [showAlipayPublicKey, setShowAlipayPublicKey] = useState(false)
 
   // 测试邮件弹窗状态
   const [showTestEmailModal, setShowTestEmailModal] = useState(false)
@@ -268,66 +260,6 @@ export function Settings() {
       addToast({ type: 'error', message: getApiErrorMessage(error, '代理设置保存失败') })
     } finally {
       setProxySaving(false)
-    }
-  }
-
-  // 分销设置独立保存：只 PUT distribution.* 相关键
-  // 不使用页面右上角"保存设置"按钮，避免影响其他未改动的设置
-  const handleDistributionSave = async () => {
-    if (!settings) {
-      return
-    }
-
-    try {
-      setDistributionSaving(true)
-      const result = await updateDistributionSettings(settings)
-      if (result.success) {
-        addToast({ type: 'success', message: result.message || '分销设置保存成功' })
-      } else {
-        addToast({ type: 'error', message: result.message || '分销设置保存失败' })
-      }
-    } catch (error) {
-      addToast({ type: 'error', message: getApiErrorMessage(error, '分销设置保存失败') })
-    } finally {
-      setDistributionSaving(false)
-    }
-  }
-
-  // 用户到期/续期设置独立保存：只 PUT user.renew_month_price / user.register_default_days
-  // 不使用页面右上角"保存设置"按钮，避免影响其他未改动的设置
-  const handleUserExpirySave = async () => {
-    if (!settings) {
-      return
-    }
-
-    const renewPrice = String(settings['user.renew_month_price'] ?? '').trim()
-    const registerDays = String(settings['user.register_default_days'] ?? '').trim()
-
-    // 允许为空（空=未配置）；非空时必须为合法数字
-    if (renewPrice !== '' && (!/^\d+(\.\d{1,2})?$/.test(renewPrice) || Number(renewPrice) <= 0)) {
-      addToast({ type: 'error', message: '续期单价必须为大于0的数字（最多两位小数）' })
-      return
-    }
-    if (registerDays !== '' && (!/^\d+$/.test(registerDays) || Number(registerDays) <= 0)) {
-      addToast({ type: 'error', message: '注册默认天数必须为正整数' })
-      return
-    }
-
-    try {
-      setUserExpirySaving(true)
-      const result = await updateSystemSettings({
-        'user.renew_month_price': renewPrice,
-        'user.register_default_days': registerDays,
-      })
-      if (result.success) {
-        addToast({ type: 'success', message: '用户到期设置保存成功' })
-      } else {
-        addToast({ type: 'error', message: result.message || '用户到期设置保存失败' })
-      }
-    } catch (error) {
-      addToast({ type: 'error', message: getApiErrorMessage(error, '用户到期设置保存失败') })
-    } finally {
-      setUserExpirySaving(false)
     }
   }
 
@@ -678,257 +610,6 @@ export function Settings() {
           excludedMenuKeys={getExeForcedHiddenMenuKeys(isExeMode)}
           saving={hiddenMenuSaving}
         />
-      )}
-
-      {/* 第三行：支付宝配置（仅管理员可见） */}
-      {user?.is_admin && (
-        <div className="grid grid-cols-1 gap-4">
-          <div className="vben-card">
-            <div className="vben-card-header">
-              <h2 className="vben-card-title">
-                <CreditCard className="w-4 h-4" />
-                支付宝配置
-              </h2>
-            </div>
-            <div className="vben-card-body space-y-4">
-              <p className="text-sm text-slate-500 dark:text-slate-400">配置支付宝当面付（扫码支付）所需参数，用于订单收款</p>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="input-group">
-                  <label className="input-label">应用ID（App ID）</label>
-                  <input
-                    type="text"
-                    value={settings?.['alipay.app_id'] || ''}
-                    onChange={(e) => setSettings(s => s ? { ...s, 'alipay.app_id': e.target.value } : null)}
-                    placeholder="请输入支付宝应用ID"
-                    className="input-ios"
-                  />
-                </div>
-                <div className="input-group">
-                  <label className="input-label">网关地址</label>
-                  <input
-                    type="text"
-                    value={settings?.['alipay.gateway_url'] || ''}
-                    onChange={(e) => setSettings(s => s ? { ...s, 'alipay.gateway_url': e.target.value } : null)}
-                    placeholder="https://openapi.alipay.com/gateway.do"
-                    className="input-ios"
-                  />
-                  <p className="text-xs text-slate-400 mt-1">正式环境：https://openapi.alipay.com/gateway.do，沙箱环境：https://openapi-sandbox.dl.alipaydev.com/gateway.do</p>
-                </div>
-                <div className="input-group md:col-span-2">
-                  <label className="input-label">应用私钥</label>
-                  <div className="relative">
-                    <textarea
-                      value={settings?.['alipay.private_key'] || ''}
-                      onChange={(e) => setSettings(s => s ? { ...s, 'alipay.private_key': e.target.value } : null)}
-                      placeholder="请输入RSA2应用私钥"
-                      className="input-ios pr-10 min-h-[80px] resize-y"
-                      style={{ WebkitTextSecurity: showAlipayPrivateKey ? 'none' : 'disc' } as React.CSSProperties}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowAlipayPrivateKey(!showAlipayPrivateKey)}
-                      className="absolute right-2 top-2 p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
-                      title={showAlipayPrivateKey ? '隐藏' : '显示'}
-                    >
-                      {showAlipayPrivateKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-                <div className="input-group md:col-span-2">
-                  <label className="input-label">支付宝公钥</label>
-                  <div className="relative">
-                    <textarea
-                      value={settings?.['alipay.alipay_public_key'] || ''}
-                      onChange={(e) => setSettings(s => s ? { ...s, 'alipay.alipay_public_key': e.target.value } : null)}
-                      placeholder="请输入支付宝公钥"
-                      className="input-ios pr-10 min-h-[80px] resize-y"
-                      style={{ WebkitTextSecurity: showAlipayPublicKey ? 'none' : 'disc' } as React.CSSProperties}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowAlipayPublicKey(!showAlipayPublicKey)}
-                      className="absolute right-2 top-2 p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
-                      title={showAlipayPublicKey ? '隐藏' : '显示'}
-                    >
-                      {showAlipayPublicKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-                <div className="input-group">
-                  <label className="input-label">异步通知地址（Notify URL）</label>
-                  <input
-                    type="text"
-                    value={settings?.['alipay.notify_url'] || ''}
-                    onChange={(e) => setSettings(s => s ? { ...s, 'alipay.notify_url': e.target.value } : null)}
-                    placeholder="例如：https://yourdomain.com/api/v1/payment/alipay/notify"
-                    className="input-ios"
-                  />
-                  <p className="text-xs text-slate-400 mt-1">支付成功后支付宝回调的地址，需要外网可访问</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 提现配置（仅管理员可见） */}
-      {user?.is_admin && (
-        <div className="grid grid-cols-1 gap-4">
-          <div className="vben-card">
-            <div className="vben-card-header">
-              <h2 className="vben-card-title">
-                <Mail className="w-4 h-4" />
-                提现配置
-              </h2>
-            </div>
-            <div className="vben-card-body space-y-4">
-              <p className="text-sm text-slate-500 dark:text-slate-400">配置提现相关参数，用于接收提现审核通知邮件</p>
-              <div className="input-group">
-                <label className="input-label">提现通知邮箱</label>
-                <input
-                  type="email"
-                  value={settings?.['withdraw.notify_email'] || ''}
-                  onChange={(e) => setSettings(s => s ? { ...s, 'withdraw.notify_email': e.target.value } : null)}
-                  placeholder="请输入接收提现申请通知的邮箱地址"
-                  className="input-ios"
-                />
-                <p className="text-xs text-slate-400 mt-1">用户申请提现时，通知邮件将发送至此邮箱。未配置则禁止提现。</p>
-              </div>
-              <div className="input-group">
-                <label className="input-label">最低提现金额（元）</label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={settings?.['withdraw.min_amount'] || ''}
-                  onChange={(e) => setSettings(s => s ? { ...s, 'withdraw.min_amount': e.target.value } : null)}
-                  placeholder="不填则不限制最低金额"
-                  className="input-ios"
-                />
-                <p className="text-xs text-slate-400 mt-1">用户每次提现金额不得低于此値，不填则不限制。</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 用户到期/续期设置（仅管理员可见） */}
-      {user?.is_admin && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div className="vben-card">
-            <div className="vben-card-header">
-              <h2 className="vben-card-title">
-                <CalendarClock className="w-4 h-4" />
-                用户到期设置
-              </h2>
-            </div>
-            <div className="vben-card-body space-y-4">
-              <p className="text-sm text-slate-500 dark:text-slate-400">配置用户续期单价与注册默认有效天数。注册默认天数留空时，新注册用户不设置到期日（永不过期）。</p>
-              <div className="input-group">
-                <label className="input-label">续期一个月的价格（元）</label>
-                <input
-                  type="text"
-                  value={(settings?.['user.renew_month_price'] as string) || ''}
-                  onChange={(e) => {
-                    const val = e.target.value
-                    if (val === '' || /^\d*\.?\d{0,2}$/.test(val)) {
-                      setSettings(s => s ? { ...s, 'user.renew_month_price': val } : null)
-                    }
-                  }}
-                  placeholder="请输入续期一个月的价格，例如：30.00"
-                  className="input-ios"
-                />
-                <p className="text-xs text-slate-400 mt-1">用户在个人设置中续期时，按「单价 × 续期月数」计算总价并扣减余额。留空则续期功能不可用。</p>
-              </div>
-              <div className="input-group">
-                <label className="input-label">注册用户默认天数（天）</label>
-                <input
-                  type="text"
-                  value={(settings?.['user.register_default_days'] as string) || ''}
-                  onChange={(e) => {
-                    const val = e.target.value
-                    if (val === '' || /^\d*$/.test(val)) {
-                      setSettings(s => s ? { ...s, 'user.register_default_days': val } : null)
-                    }
-                  }}
-                  placeholder="留空表示注册不设置到期日"
-                  className="input-ios"
-                />
-                <p className="text-xs text-slate-400 mt-1">新用户注册时，到期日 = 注册时间 + 默认天数。留空则新用户永不过期。</p>
-              </div>
-              <div className="flex justify-end pt-2">
-                <button
-                  onClick={handleUserExpirySave}
-                  disabled={userExpirySaving}
-                  className="btn-ios-primary"
-                >
-                  {userExpirySaving ? <ButtonLoading /> : <Save className="w-4 h-4" />}
-                  保存到期设置
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 第四行：分销设置（仅管理员可见） */}
-      {user?.is_admin && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div className="vben-card">
-            <div className="vben-card-header">
-              <h2 className="vben-card-title">
-                <Percent className="w-4 h-4" />
-                分销设置
-              </h2>
-            </div>
-            <div className="vben-card-body space-y-4">
-              <div className="input-group">
-                <label className="input-label">手续费类型</label>
-                <select
-                  value={settings?.['distribution.fee_type'] || 'fixed'}
-                  onChange={(e) => setSettings(s => s ? { ...s, 'distribution.fee_type': e.target.value } : null)}
-                  className="input-ios"
-                >
-                  <option value="fixed">固定金额（元）</option>
-                  <option value="percent">按订单金额百分比（%）</option>
-                </select>
-              </div>
-              <div className="input-group">
-                <label className="input-label">
-                  {settings?.['distribution.fee_type'] === 'percent' ? '手续费百分比（%）' : '手续费金额（元）'}
-                </label>
-                <input
-                  type="text"
-                  value={settings?.['distribution.fee_rate'] || ''}
-                  onChange={(e) => {
-                    const val = e.target.value
-                    if (val === '' || /^\d*\.?\d{0,2}$/.test(val)) {
-                      setSettings(s => s ? { ...s, 'distribution.fee_rate': val } : null)
-                    }
-                  }}
-                  placeholder={settings?.['distribution.fee_type'] === 'percent' ? '请输入百分比，例如：5 表示 5%' : '请输入手续费金额，例如：2.00'}
-                  className="input-ios"
-                />
-                <p className="text-xs text-slate-400 mt-1">
-                  {settings?.['distribution.fee_type'] === 'percent'
-                    ? '按订单金额的百分比收取手续费，例如输入 5 表示每笔收取订单金额的 5%'
-                    : '分销交易时收取的固定手续费金额，例如输入 2.00 表示每笔收取 2 元'}
-                </p>
-              </div>
-              {/* 独立保存按钮：只提交分销相关设置，不影响页面其他未改动字段 */}
-              <div className="flex justify-end pt-2">
-                <button
-                  onClick={handleDistributionSave}
-                  disabled={distributionSaving}
-                  className="btn-ios-primary"
-                >
-                  {distributionSaving ? <ButtonLoading /> : <Save className="w-4 h-4" />}
-                  保存分销设置
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
       )}
 
       {/* 代理设置（仅管理员可见） */}

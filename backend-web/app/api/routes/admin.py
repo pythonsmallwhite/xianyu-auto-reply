@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,30 +15,28 @@ from common.models.message_notification import MessageNotification
 from common.models.notification_channel import NotificationChannel
 from common.models.risk_control_log import XYRiskControlLog
 from common.models.account_login_log import XYAccountLoginLog
-from common.models.scheduled_redelivery_log import ScheduledRedeliveryLog
 from common.models.scheduled_rate_log import ScheduledRateLog
 from common.models.scheduled_polish_log import ScheduledPolishLog
 from common.models.scheduled_red_flower_log import ScheduledRedFlowerLog
 from common.models.scheduled_login_renew_log import ScheduledLoginRenewLog
 from common.models.scheduled_close_notice_log import ScheduledCloseNoticeLog
 from common.models.user import User, UserRole, UserStatus
-from common.models.user_setting import UserSetting
 from common.models.xy_account import XYAccount
 from common.models.xy_catalog_item import XYCatalogItem
 from common.models.xy_keyword_rule import XYKeywordRule
 from common.models.xy_order import XYOrder
-from common.models.agent_order import AgentOrder
 from common.schemas.common import ApiResponse
 from common.schemas.user import AdminUserCreate, AdminUserUpdate
 from app.services.dashboard_stats_service import DashboardStatsService
 from app.services.scheduled_batch_log_service import ScheduledBatchLogService
 from app.services.user_service import UserService
-from app.services.recharge_service import RechargeService
-from common.services.settlement_service import BALANCE_KEY
 
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
 router = APIRouter(tags=["admin"])
 settings = get_settings()
+
+# 已移除功能（卡券自动发货 / 自动续售）遗留在旧库 xy_scheduled_tasks 中的任务行，列表中不再展示
+RETIRED_TASK_CODES = ("redelivery", "delivery_timeout", "auto_relist_scan")
 
 TABLE_MAP = {
     "users": User.__table__,
@@ -66,45 +62,11 @@ LEGACY_TABLE_ALIASES = {
 }
 
 
-def _format_balance(val: str | None) -> str:
-    """将余额原始值（xy_user_settings 中的字符串）格式化为两位小数字符串。
-
-    取不到 / 解析失败一律视为 0.00，避免前端展示异常。
-    """
-    if val is None:
-        return "0.00"
-    try:
-        return f"{Decimal(str(val)):.2f}"
-    except (InvalidOperation, ValueError):
-        return "0.00"
-
-
-async def _fetch_user_balances(session: AsyncSession, user_ids: list[int]) -> dict[int, str]:
-    """批量查询用户余额（存于 xy_user_settings，key=balance）。
-
-    Args:
-        session: 数据库会话
-        user_ids: 用户ID列表
-
-    Returns:
-        {user_id: 余额原始字符串}，无记录的用户不在结果中
-    """
-    if not user_ids:
-        return {}
-    stmt = select(UserSetting.user_id, UserSetting.value).where(
-        UserSetting.key == BALANCE_KEY,
-        UserSetting.user_id.in_(user_ids),
-    )
-    return {uid: val for uid, val in (await session.execute(stmt)).all()}
-
-
 def _build_user_payload(
     user: User,
     cookie_counts: dict[int, int] | None = None,
-    balances: dict[int, str] | None = None,
 ) -> dict:
     counts = cookie_counts or {}
-    balance_map = balances or {}
     return {
         "id": user.id,
         "username": user.username,
@@ -115,9 +77,6 @@ def _build_user_payload(
         "is_admin": user.role == UserRole.ADMIN,
         "account_limit": user.account_limit,
         "cookie_count": counts.get(user.id, 0),
-        "card_count": 0,
-        "balance": _format_balance(balance_map.get(user.id)),
-        "expire_at": safe_isoformat(user.expire_at),
     }
 
 
@@ -153,10 +112,7 @@ async def list_users(
         for owner_id, count in (await session.execute(cookie_counts_stmt)).all()
     }
 
-    # 批量查询当前页用户的余额，避免逐行查询
-    balances = await _fetch_user_balances(session, [user.id for user in users])
-
-    payload = [_build_user_payload(user, cookie_counts, balances) for user in users]
+    payload = [_build_user_payload(user, cookie_counts) for user in users]
     return {"users": payload, "success": True, "total": total, "limit": limit, "offset": offset}
 
 
@@ -222,43 +178,7 @@ async def update_user(
         await session.rollback()
         return ApiResponse(success=False, message=f"更新用户失败: {str(exc)}")
 
-    balances = await _fetch_user_balances(session, [updated_user.id])
-    return ApiResponse(success=True, message="用户更新成功", data={"user": _build_user_payload(updated_user, balances=balances)})
-
-
-class AdminRechargeRequest(BaseModel):
-    """管理员手动调整用户余额请求"""
-    amount: str = Field(..., description="调整金额，正数为充值，负数为扣减，例如：10.00 或 -5.00")
-    remark: str = Field(default="", description="备注（可选）")
-
-
-@router.post("/users/{user_id}/recharge", response_model=ApiResponse)
-async def recharge_user(
-    user_id: int,
-    payload: AdminRechargeRequest,
-    current_admin: User = Depends(deps.get_current_admin_user),
-    session: AsyncSession = Depends(deps.get_db_session),
-    user_service: UserService = Depends(deps.get_user_service),
-) -> ApiResponse:
-    """管理员手动调整指定用户余额（正数充值 / 负数扣减）
-
-    余额调整与流水写入在 RechargeService.manual_recharge 内加行锁防并发，
-    并在 service 内部 commit，路由层不重复 commit。
-    """
-    user = await user_service.get(user_id)
-    if not user:
-        return ApiResponse(success=False, message="用户不存在")
-
-    service = RechargeService(session)
-    result = await service.manual_recharge(
-        admin_user_id=current_admin.id,
-        target_user_id=user_id,
-        amount=payload.amount,
-        remark=payload.remark,
-    )
-    if not result.get("success"):
-        return ApiResponse(success=False, message=result.get("message", "余额调整失败"))
-    return ApiResponse(success=True, message=result.get("message", "余额调整成功"), data=result.get("data"))
+    return ApiResponse(success=True, message="用户更新成功", data={"user": _build_user_payload(updated_user)})
 
 
 @router.delete("/users/{user_id}", response_model=ApiResponse)
@@ -633,52 +553,6 @@ async def reload_system_cache(
         )
 
 
-@router.get("/redelivery-batches")
-async def list_redelivery_batches(
-    start_date: str | None = Query(default=None, description="开始日期，格式：YYYY-MM-DD"),
-    end_date: str | None = Query(default=None, description="结束日期，格式：YYYY-MM-DD"),
-    page: int = Query(default=1, ge=1, description="页码"),
-    page_size: int = Query(default=20, ge=1, le=100, description="每页数量"),
-    _: User = Depends(deps.get_current_admin_user),
-    session: AsyncSession = Depends(deps.get_db_session),
-) -> dict:
-    """获取定时补发货执行批次列表（管理员专用）"""
-    service = ScheduledBatchLogService(session)
-    batches, total = await service.list_redelivery_batches(
-        start_date=start_date,
-        end_date=end_date,
-        page=page,
-        page_size=page_size,
-    )
-
-    return {
-        "success": True,
-        "data": batches,
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-        "total_pages": (total + page_size - 1) // page_size if total > 0 else 0,
-    }
-
-
-@router.get("/redelivery-batches/{batch_id}")
-async def get_redelivery_batch_detail(
-    batch_id: str,
-    _: User = Depends(deps.get_current_admin_user),
-    session: AsyncSession = Depends(deps.get_db_session),
-) -> dict:
-    """获取定时补发货执行批次详情（管理员专用）"""
-    service = ScheduledBatchLogService(session)
-    data = await service.get_redelivery_batch_detail(batch_id)
-    if data is None:
-        return {"success": False, "message": "批次不存在", "data": None}
-
-    return {
-        "success": True,
-        "data": data,
-    }
-
-
 # ==================== 定时补评价日志接口 ====================
 
 @router.get("/rate-batches")
@@ -769,7 +643,11 @@ async def list_scheduled_tasks(
     
     try:
         # 直接查询数据库获取任务列表
-        stmt = select(ScheduledTask).order_by(ScheduledTask.id)
+        stmt = (
+            select(ScheduledTask)
+            .where(ScheduledTask.task_code.not_in(RETIRED_TASK_CODES))
+            .order_by(ScheduledTask.id)
+        )
         result = await session.execute(stmt)
         tasks = result.scalars().all()
         
@@ -971,44 +849,6 @@ async def get_polish_batch_detail(
 
 
 # ==================== 清空日志接口 ====================
-
-@router.delete("/redelivery-logs/clear", response_model=ApiResponse)
-async def clear_redelivery_logs(
-    _: User = Depends(deps.get_current_admin_user),
-    session: AsyncSession = Depends(deps.get_db_session),
-) -> ApiResponse:
-    """清空定时补发货日志（只清空10天前的数据）"""
-    from datetime import datetime, timedelta
-    from sqlalchemy import delete
-    from loguru import logger
-    
-    try:
-        # 计算10天前的时间
-        ten_days_ago = get_beijing_now_naive() - timedelta(days=10)
-        
-        # 删除10天前的日志
-        stmt = delete(ScheduledRedeliveryLog).where(
-            ScheduledRedeliveryLog.created_at < ten_days_ago
-        )
-        
-        result = await session.execute(stmt)
-        await session.commit()
-        
-        deleted_count = result.rowcount
-        logger.info(f"[定时补发货日志] 已清空 {deleted_count} 条10天前的日志")
-        
-        return ApiResponse(
-            success=True,
-            message=f"已清空 {deleted_count} 条10天前的补发货日志"
-        )
-    except Exception as e:
-        await session.rollback()
-        logger.error(f"[定时补发货日志] 清空日志失败: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"清空补发货日志失败: {str(e)}"
-        )
-
 
 @router.delete("/rate-logs/clear", response_model=ApiResponse)
 async def clear_rate_logs(

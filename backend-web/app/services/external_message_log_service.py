@@ -2,7 +2,7 @@
 公开消息日志查询服务。
 
 功能：
-1. 使用分销秘钥校验调用方身份并限定用户数据范围。
+1. 使用外部接口秘钥校验调用方身份并限定用户数据范围。
 2. 按商品 ID 查询该用户的消息日志。
 3. 复用内部消息日志服务完成消息类型筛选和分页查询。
 """
@@ -75,7 +75,7 @@ class ExternalMessageLogQueryService:
         self.session = session
 
     async def _resolve_owner_id(self, secret_key: str) -> int:
-        """根据分销秘钥解析可访问消息日志的用户 ID。"""
+        """根据外部接口秘钥解析可访问消息日志的用户 ID。"""
         user = await ExternalAccountService(self.session).get_user_by_secret(secret_key)
         if user is None:
             raise ExternalMessageLogAccessError(40001, "秘钥不存在")
@@ -96,7 +96,7 @@ class ExternalMessageLogQueryService:
         查询秘钥所属用户指定商品的消息日志并返回分页结果。
 
         Args:
-            secret_key: 分销秘钥。
+            secret_key: 外部接口秘钥。
             item_id: 商品 ID。
             message_type: 消息类型，支持 auto_reply 或 auto_delivery。
             page: 页码，从 1 开始。

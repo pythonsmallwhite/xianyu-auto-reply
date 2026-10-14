@@ -59,11 +59,6 @@ import {
 } from '@/api/wrappers/ai-settings';
 import { useAccountsStore } from '@/stores/accounts';
 import {
-  getAgreeDeliverConfig,
-  updateAgreeDeliverConfig,
-  getPickupUrlSuggestion,
-} from '@/api/wrappers/agree-deliver';
-import {
   getProxyConfig,
   updateProxyConfig,
   updateMessageExpireTime,
@@ -75,18 +70,11 @@ import {
   uploadConfirmReceiptImage,
   getAutoRateConfig,
   updateAutoRateConfig,
-  getDeliveryBlockRules,
-  updateDeliveryBlockRules,
-  getRefundCancelConfig,
-  updateRefundCancelConfig,
   type ProxyType,
   type ProxyConfig,
   type FaceVerificationScreenshot,
   type ConfirmReceiptConfig,
   type AutoRateConfig,
-  type DeliveryBlockRuleItem,
-  type DeliveryBlockRulePayload,
-  type RefundCancelConfig,
 } from '@/api/wrappers/account-advanced';
 
 const PAGE_SIZE = 20;
@@ -101,31 +89,24 @@ const FILTER_TABS: { key: AccountFilter; label: string }[] = [
   { key: 'disabled', label: '已禁用' },
 ];
 
-/** 9 个功能开关定义 */
+/** 功能开关定义 */
 const TOGGLE_DEFS: { key: ToggleKey; label: string }[] = [
-  { key: 'auto_confirm', label: '自动确认收货' },
   { key: 'auto_polish', label: '商品自动擦亮' },
   { key: 'auto_red_flower', label: '自动求小红花' },
-  { key: 'scheduled_redelivery', label: '定时补发货' },
   { key: 'scheduled_rate', label: '定时补评价' },
-  { key: 'confirm_before_send', label: '发货成功再发卡券' },
-  { key: 'send_before_confirm', label: '卡券成功再确认发货' },
-  { key: 'only_send_card', label: '只发卡券不确认发货' },
   { key: 'ai_reply_block_ordered_users', label: '已下单禁AI回复' },
 ];
 
-/** 8 项高级配置入口 key，对应弹窗 dispatch */
+/** 高级配置入口 key，对应弹窗 dispatch */
 type AdvancedConfigKey =
   | 'proxy'
   | 'messageExpireTime'
   | 'replyDelay'
   | 'faceVerification'
   | 'confirmReceipt'
-  | 'autoRate'
-  | 'deliveryDisabled'
-  | 'refundCancel';
+  | 'autoRate';
 
-/** 8 项高级配置入口定义（与 AI设置/默认回复/同意后发货 同风格） */
+/** 高级配置入口定义（与 AI设置/默认回复 同风格） */
 const ADVANCED_CONFIG_DEFS: { key: AdvancedConfigKey; label: string }[] = [
   { key: 'proxy', label: '代理设置' },
   { key: 'messageExpireTime', label: '消息等待时间' },
@@ -133,8 +114,6 @@ const ADVANCED_CONFIG_DEFS: { key: AdvancedConfigKey; label: string }[] = [
   { key: 'faceVerification', label: '人脸验证截图' },
   { key: 'confirmReceipt', label: '确认收货消息' },
   { key: 'autoRate', label: '自动评价' },
-  { key: 'deliveryDisabled', label: '禁止发货规则' },
-  { key: 'refundCancel', label: '退款订单注销' },
 ];
 
 /** 扫码状态文案 */
@@ -174,7 +153,6 @@ interface AccountCardProps {
   onDelete: (account: AccountDetail) => void;
   onPasswordLogin: (account: AccountDetail) => void;
   onToggleExpand: (pk: number) => void;
-  onOpenAgreeConfig: (account: AccountDetail) => void;
   onOpenAiSettings: (account: AccountDetail) => void;
   onOpenDefaultReply: (account: AccountDetail) => void;
   onOpenAdvanced: (account: AccountDetail, key: AdvancedConfigKey) => void;
@@ -215,7 +193,7 @@ function CardActionButton({
   );
 }
 
-/** 账号卡片：统计 + 4 按钮 + 9 开关的可展开列表项 */
+/** 账号卡片：统计 + 4 按钮 + 功能开关的可展开列表项 */
 const AccountCard = memo(function AccountCard({
   item,
   c,
@@ -230,7 +208,6 @@ const AccountCard = memo(function AccountCard({
   onDelete,
   onPasswordLogin,
   onToggleExpand,
-  onOpenAgreeConfig,
   onOpenAiSettings,
   onOpenDefaultReply,
   onOpenAdvanced,
@@ -321,7 +298,7 @@ const AccountCard = memo(function AccountCard({
           </Pressable>
         </View>
 
-        {/* 9 个功能开关（可展开） */}
+        {/* 功能开关（可展开） */}
         {expanded && (
           <View style={[styles.togglesContainer, { borderTopColor: c.border }]}>
             {TOGGLE_DEFS.map(({ key, label }) => (
@@ -337,22 +314,17 @@ const AccountCard = memo(function AccountCard({
                 />
               </View>
             ))}
-            {/* 同意后发货配置入口 */}
-            <Pressable style={styles.toggleRow} onPress={() => onOpenAgreeConfig(item)}>
-              <Text style={[styles.toggleLabel, { color: c.text }]}>同意后发货</Text>
-              <Text style={[styles.agreeEntryHint, { color: c.textMuted }]}>配置 ›</Text>
-            </Pressable>
             {/* AI 设置入口 */}
             <Pressable style={styles.toggleRow} onPress={() => onOpenAiSettings(item)}>
               <Text style={[styles.toggleLabel, { color: c.text }]}>AI设置</Text>
-              <Text style={[styles.agreeEntryHint, { color: c.textMuted }]}>配置 ›</Text>
+              <Text style={[styles.entryHint, { color: c.textMuted }]}>配置 ›</Text>
             </Pressable>
             {/* 默认回复入口 */}
             <Pressable style={styles.toggleRow} onPress={() => onOpenDefaultReply(item)}>
               <Text style={[styles.toggleLabel, { color: c.text }]}>默认回复</Text>
-              <Text style={[styles.agreeEntryHint, { color: c.textMuted }]}>配置 ›</Text>
+              <Text style={[styles.entryHint, { color: c.textMuted }]}>配置 ›</Text>
             </Pressable>
-            {/* 8 项高级配置入口 */}
+            {/* 高级配置入口 */}
             {ADVANCED_CONFIG_DEFS.map(({ key, label }) => (
               <Pressable
                 key={key}
@@ -360,7 +332,7 @@ const AccountCard = memo(function AccountCard({
                 onPress={() => onOpenAdvanced(item, key)}
               >
                 <Text style={[styles.toggleLabel, { color: c.text }]}>{label}</Text>
-                <Text style={[styles.agreeEntryHint, { color: c.textMuted }]}>配置 ›</Text>
+                <Text style={[styles.entryHint, { color: c.textMuted }]}>配置 ›</Text>
               </Pressable>
             ))}
           </View>
@@ -410,16 +382,6 @@ export default function AccountsScreen() {
   // 顶部筛选：状态 tab + 关键词搜索（客户端过滤已加载列表）
   const [filterTab, setFilterTab] = useState<AccountFilter>('all');
   const [searchKey, setSearchKey] = useState('');
-
-  // 同意后发货配置
-  const [agreeVisible, setAgreeVisible] = useState(false);
-  const [agreeAccount, setAgreeAccount] = useState<AccountDetail | null>(null);
-  const [agreeLoading, setAgreeLoading] = useState(false);
-  const [agreeSaving, setAgreeSaving] = useState(false);
-  const [agreeEnabled, setAgreeEnabled] = useState(false);
-  const [agreeMessage, setAgreeMessage] = useState('');
-  const [agreeUrl, setAgreeUrl] = useState('');
-  const [suggestLoading, setSuggestLoading] = useState(false);
 
   // AI 设置
   const [aiVisible, setAiVisible] = useState(false);
@@ -502,34 +464,16 @@ export default function AccountsScreen() {
   const [arTextContent, setArTextContent] = useState('');
   const [arApiUrl, setArApiUrl] = useState('');
 
-  // 7. 禁止发货规则
-  const [ddVisible, setDdVisible] = useState(false);
-  const [ddAccount, setDdAccount] = useState<AccountDetail | null>(null);
-  const [ddLoading, setDdLoading] = useState(false);
-  const [ddSaving, setDdSaving] = useState(false);
-  const [ddRules, setDdRules] = useState<DeliveryBlockRuleItem[]>([]);
-
-  // 8. 退款订单注销
-  const [rcVisible, setRcVisible] = useState(false);
-  const [rcAccount, setRcAccount] = useState<AccountDetail | null>(null);
-  const [rcLoading, setRcLoading] = useState(false);
-  const [rcSaving, setRcSaving] = useState(false);
-  const [rcEnabled, setRcEnabled] = useState(false);
-  const [rcUrl, setRcUrl] = useState('');
-  const [rcTimeout, setRcTimeout] = useState('60');
-
   // 分页游标
   const pageRef = useRef(1);
   const hasMoreRef = useRef(true);
   const loadingMoreRef = useRef(false);
   const loadedRef = useRef(0);
   const totalRef = useRef(0);
-  // 同意后发货配置请求序号，丢弃快速关闭/重开时的过期回填
-  const agreeReqRef = useRef(0);
   // AI 设置 / 默认回复请求序号，同上
   const aiReqRef = useRef(0);
   const replyReqRef = useRef(0);
-  // 高级配置请求序号：代理/人脸/确认收货/自动评价/禁止发货/退款注销 共用，丢弃过期回填
+  // 高级配置请求序号：代理/人脸/确认收货/自动评价 共用，丢弃过期回填
   const advancedReqRef = useRef(0);
 
   // 客户端筛选：按 tab（在线 / 离线=启用且不在线 / 已禁用）+ 关键词（账号ID/备注）
@@ -869,80 +813,6 @@ export default function AccountsScreen() {
       { cancelable: true },
     );
   }, []);
-
-  // ---- 同意后发货配置 ----
-  const openAgreeConfig = useCallback((account: AccountDetail) => {
-    const req = ++agreeReqRef.current;
-    setAgreeAccount(account);
-    setAgreeEnabled(false);
-    setAgreeMessage('');
-    setAgreeUrl('');
-    setAgreeVisible(true);
-    setAgreeLoading(true);
-    getAgreeDeliverConfig(account.id)
-      .then((cfg) => {
-        if (req !== agreeReqRef.current) return;
-        setAgreeEnabled(cfg.enabled);
-        setAgreeMessage(cfg.notify_message ?? '');
-        setAgreeUrl(cfg.pickup_url ?? '');
-      })
-      .catch((e) => {
-        if (req !== agreeReqRef.current) return;
-        Alert.alert('加载配置失败', (e as Error).message);
-        setAgreeVisible(false);
-        setAgreeAccount(null);
-      })
-      .finally(() => {
-        if (req !== agreeReqRef.current) return;
-        setAgreeLoading(false);
-      });
-  }, []);
-
-  function closeAgree() {
-    agreeReqRef.current += 1;
-    setAgreeVisible(false);
-    setAgreeAccount(null);
-  }
-
-  async function handleSuggestPickupUrl() {
-    setSuggestLoading(true);
-    try {
-      const s = await getPickupUrlSuggestion();
-      if (s?.pickup_url) {
-        setAgreeUrl(s.pickup_url);
-      } else {
-        Alert.alert('未获取到推荐', s?.warning || '暂时没有推荐地址，请手动填写');
-      }
-    } catch (e) {
-      Alert.alert('获取推荐失败', (e as Error).message);
-    } finally {
-      setSuggestLoading(false);
-    }
-  }
-
-  async function saveAgreeConfig() {
-    if (!agreeAccount) return;
-    const url = agreeUrl.trim();
-    // 后端约束：enabled=true 时 pickup_url 必填
-    if (agreeEnabled && !url) {
-      Alert.alert('缺少提货页地址', '开启同意后发货时必须填写提货页地址');
-      return;
-    }
-    setAgreeSaving(true);
-    try {
-      await updateAgreeDeliverConfig(agreeAccount.id, {
-        enabled: agreeEnabled,
-        notify_message: agreeMessage.trim(),
-        pickup_url: url,
-      });
-      Alert.alert('成功', '同意后发货配置已保存');
-      closeAgree();
-    } catch (e) {
-      Alert.alert('保存失败', (e as Error).message);
-    } finally {
-      setAgreeSaving(false);
-    }
-  }
 
   // ---- AI 设置 ----
   const openAiSettings = useCallback((account: AccountDetail) => {
@@ -1467,143 +1337,6 @@ export default function AccountsScreen() {
     }
   }
 
-  // ---- 7. 禁止发货规则 ----
-  function openDeliveryDisabled(account: AccountDetail) {
-    const req = ++advancedReqRef.current;
-    setDdAccount(account);
-    setDdVisible(true);
-    setDdLoading(true);
-    setDdRules([]);
-    getDeliveryBlockRules(account.id)
-      .then((rules) => {
-        if (req !== advancedReqRef.current) return;
-        setDdRules(rules);
-      })
-      .catch((e) => {
-        if (req !== advancedReqRef.current) return;
-        Alert.alert('加载规则失败', (e as Error).message);
-        setDdVisible(false);
-        setDdAccount(null);
-      })
-      .finally(() => {
-        if (req !== advancedReqRef.current) return;
-        setDdLoading(false);
-      });
-  }
-  function closeDd() {
-    advancedReqRef.current += 1;
-    setDdVisible(false);
-    setDdAccount(null);
-    setDdRules([]);
-  }
-  // 更新单条规则字段；联动：关闭主动关闭订单时"关闭后只发卡券"强制关
-  function updateDdRule(ruleCode: string, updates: Partial<DeliveryBlockRuleItem>) {
-    setDdRules((prev) =>
-      prev.map((r) => {
-        if (r.rule_code !== ruleCode) return r;
-        const updated = { ...r, ...updates };
-        if ('auto_close_order' in updates && !updates.auto_close_order) {
-          updated.only_card_after_close = false;
-        }
-        return updated;
-      }),
-    );
-  }
-  async function saveDeliveryDisabled() {
-    if (!ddAccount) return;
-    for (const rule of ddRules) {
-      if (rule.enabled && rule.block_reason && rule.block_reason.length > 500) {
-        Alert.alert('原因过长', `规则「${rule.rule_name}」的禁止发货原因不能超过500字`);
-        return;
-      }
-    }
-    setDdSaving(true);
-    try {
-      const payload: DeliveryBlockRulePayload[] = ddRules.map((r) => ({
-        rule_code: r.rule_code,
-        enabled: r.enabled,
-        priority: r.priority,
-        block_reason: r.enabled ? (r.block_reason.trim() || null) : null,
-        auto_close_order: r.enabled ? r.auto_close_order : false,
-        only_card_after_close:
-          r.enabled && r.auto_close_order ? r.only_card_after_close : false,
-        excluded_item_ids: r.enabled ? r.excluded_item_ids.filter(Boolean) : [],
-        config: r.config ?? null,
-      }));
-      await updateDeliveryBlockRules(ddAccount.id, payload);
-      Alert.alert('成功', '禁止发货规则已保存');
-      closeDd();
-    } catch (e) {
-      Alert.alert('保存失败', (e as Error).message);
-    } finally {
-      setDdSaving(false);
-    }
-  }
-
-  // ---- 8. 退款订单注销 ----
-  function openRefundCancel(account: AccountDetail) {
-    const req = ++advancedReqRef.current;
-    setRcAccount(account);
-    setRcVisible(true);
-    setRcLoading(true);
-    setRcEnabled(false);
-    setRcUrl('');
-    setRcTimeout('60');
-    getRefundCancelConfig(account.id)
-      .then((cfg) => {
-        if (req !== advancedReqRef.current) return;
-        setRcEnabled(cfg.enabled);
-        setRcUrl(cfg.url ?? '');
-        setRcTimeout(String(cfg.timeout ?? 60));
-      })
-      .catch((e) => {
-        if (req !== advancedReqRef.current) return;
-        Alert.alert('加载配置失败', (e as Error).message);
-        setRcVisible(false);
-        setRcAccount(null);
-      })
-      .finally(() => {
-        if (req !== advancedReqRef.current) return;
-        setRcLoading(false);
-      });
-  }
-  function closeRc() {
-    advancedReqRef.current += 1;
-    setRcVisible(false);
-    setRcAccount(null);
-  }
-  async function saveRefundCancel() {
-    if (!rcAccount) return;
-    if (rcEnabled && !rcUrl.trim()) {
-      Alert.alert('缺少请求URL', '开启退款订单注销时，请求URL不能为空');
-      return;
-    }
-    if (rcEnabled && !/^https?:\/\//i.test(rcUrl.trim())) {
-      Alert.alert('URL无效', '请求URL必须以 http:// 或 https:// 开头');
-      return;
-    }
-    const timeoutNum = Number(rcTimeout);
-    if (!Number.isFinite(timeoutNum) || timeoutNum < 1) {
-      Alert.alert('超时无效', '超时时间请输入大于 0 的秒数');
-      return;
-    }
-    const cfg: RefundCancelConfig = {
-      enabled: rcEnabled,
-      url: rcEnabled ? rcUrl.trim() : null,
-      timeout: Math.floor(timeoutNum),
-    };
-    setRcSaving(true);
-    try {
-      await updateRefundCancelConfig(rcAccount.id, cfg);
-      Alert.alert('成功', '退款订单注销配置已保存');
-      closeRc();
-    } catch (e) {
-      Alert.alert('保存失败', (e as Error).message);
-    } finally {
-      setRcSaving(false);
-    }
-  }
-
   // 高级配置开启 dispatcher：通过 ref 间接调用，保证 handleOpenAdvanced 引用稳定
   const openAdvancedImpl = (account: AccountDetail, key: AdvancedConfigKey) => {
     switch (key) {
@@ -1613,8 +1346,6 @@ export default function AccountsScreen() {
       case 'faceVerification': openFaceVerification(account); break;
       case 'confirmReceipt': openConfirmReceipt(account); break;
       case 'autoRate': openAutoRate(account); break;
-      case 'deliveryDisabled': openDeliveryDisabled(account); break;
-      case 'refundCancel': openRefundCancel(account); break;
     }
   };
   const openAdvancedRef = useRef(openAdvancedImpl);
@@ -1667,7 +1398,6 @@ export default function AccountsScreen() {
         onDelete={handleDelete}
         onPasswordLogin={handleCardPasswordLogin}
         onToggleExpand={handleCardToggleExpand}
-        onOpenAgreeConfig={openAgreeConfig}
         onOpenAiSettings={openAiSettings}
         onOpenDefaultReply={openDefaultReply}
         onOpenAdvanced={handleOpenAdvanced}
@@ -1686,7 +1416,6 @@ export default function AccountsScreen() {
       handleDelete,
       handleCardPasswordLogin,
       handleCardToggleExpand,
-      openAgreeConfig,
       openAiSettings,
       openDefaultReply,
       handleOpenAdvanced,
@@ -1976,102 +1705,6 @@ export default function AccountsScreen() {
                 style={styles.modalBtn}
               />
             </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      {/* 同意后发货配置 Modal */}
-      <Modal
-        visible={agreeVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={closeAgree}
-      >
-        <Pressable style={styles.modalOverlay} onPress={closeAgree}>
-          <Pressable
-            style={[styles.modalCard, { backgroundColor: c.surface }]}
-            onPress={() => {}}
-          >
-            <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: c.text }]}>同意后发货</Text>
-              <Pressable onPress={closeAgree} hitSlop={8}>
-                <Text style={[styles.closeBtn, { color: c.textMuted }]}>✕</Text>
-              </Pressable>
-            </View>
-
-            {agreeLoading ? (
-              <View style={styles.agreeLoadingBox}>
-                <ActivityIndicator size="large" color={c.primary} />
-                <Text style={[styles.agreeLoadingText, { color: c.textSecondary }]}>
-                  加载配置中...
-                </Text>
-              </View>
-            ) : (
-              <>
-                <View style={styles.toggleRow}>
-                  <Text style={[styles.toggleLabel, { color: c.text }]}>开启</Text>
-                  <Switch
-                    value={agreeEnabled}
-                    onValueChange={setAgreeEnabled}
-                    trackColor={{ false: c.border, true: c.primary }}
-                    thumbColor="#FFFFFF"
-                  />
-                </View>
-
-                <View style={styles.fieldGroup}>
-                  <Text style={[styles.fieldLabel, { color: c.textSecondary }]}>通知话术</Text>
-                  <Input
-                    value={agreeMessage}
-                    onChangeText={setAgreeMessage}
-                    placeholder="买家下单后收到的通知内容"
-                    multiline
-                    style={styles.agreeTextarea}
-                  />
-                </View>
-
-                <View style={styles.fieldGroup}>
-                  <Text style={[styles.fieldLabel, { color: c.textSecondary }]}>提货页地址</Text>
-                  <View style={styles.agreeUrlRow}>
-                    <Input
-                      value={agreeUrl}
-                      onChangeText={setAgreeUrl}
-                      placeholder="https://..."
-                      autoCapitalize="none"
-                      keyboardType="url"
-                      style={styles.agreeUrlInput}
-                    />
-                    <Button
-                      label="获取推荐"
-                      variant="secondary"
-                      onPress={handleSuggestPickupUrl}
-                      loading={suggestLoading}
-                      style={styles.agreeSuggestBtn}
-                    />
-                  </View>
-                  {agreeEnabled && !agreeUrl.trim() ? (
-                    <Text style={[styles.agreeUrlHint, { color: c.warning }]}>
-                      开启后必须填写提货页地址
-                    </Text>
-                  ) : null}
-                </View>
-
-                <View style={styles.modalActions}>
-                  <Button
-                    label="取消"
-                    variant="ghost"
-                    onPress={closeAgree}
-                    style={styles.modalBtn}
-                  />
-                  <Button
-                    label="保存"
-                    onPress={saveAgreeConfig}
-                    loading={agreeSaving}
-                    disabled={agreeSaving}
-                    style={styles.modalBtn}
-                  />
-                </View>
-              </>
-            )}
           </Pressable>
         </Pressable>
       </Modal>
@@ -2778,186 +2411,6 @@ export default function AccountsScreen() {
         )}
       </FormModal>
 
-      {/* 禁止发货规则 Modal（多规则卡片） */}
-      <FormModal
-        visible={ddVisible}
-        onClose={closeDd}
-        title="禁止发货规则"
-        contentStyle={styles.configSheet}
-      >
-        {ddLoading ? (
-          <View style={styles.configLoadingBox}>
-            <ActivityIndicator size="large" color={c.primary} />
-            <Text style={[styles.configLoadingText, { color: c.textSecondary }]}>
-              加载规则中...
-            </Text>
-          </View>
-        ) : ddRules.length === 0 ? (
-          <View style={styles.configLoadingBox}>
-            <Text style={[styles.configLoadingText, { color: c.textMuted }]}>
-              暂无可用规则
-            </Text>
-          </View>
-        ) : (
-          <>
-            <ScrollView
-              style={styles.configScroll}
-              contentContainerStyle={styles.configBody}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-            >
-              {ddRules.map((rule) => (
-                <View key={rule.rule_code} style={[styles.ruleCard, { borderColor: c.border }]}>
-                  <View style={styles.switchRow}>
-                    <View style={styles.ruleTitleBox}>
-                      <Text style={[styles.ruleName, { color: c.text }]} numberOfLines={1}>
-                        {rule.rule_name}
-                      </Text>
-                      <Text style={[styles.ruleDesc, { color: c.textMuted }]} numberOfLines={2}>
-                        {rule.rule_description}
-                      </Text>
-                    </View>
-                    <Switch
-                      value={rule.enabled}
-                      onValueChange={(v) => updateDdRule(rule.rule_code, { enabled: v })}
-                      trackColor={{ false: c.border, true: c.primary }}
-                      thumbColor="#FFFFFF"
-                    />
-                  </View>
-                  {rule.enabled && (
-                    <>
-                      <View style={styles.fieldGroup}>
-                        <Text style={[styles.fieldLabel, { color: c.textSecondary }]}>禁止发货原因</Text>
-                        <Input
-                          value={rule.block_reason}
-                          onChangeText={(t) => updateDdRule(rule.rule_code, { block_reason: t })}
-                          placeholder="命中规则时给买家的提示..."
-                          multiline
-                          style={styles.textarea}
-                        />
-                      </View>
-                      <View style={styles.switchRow}>
-                        <Text style={[styles.switchLabel, { color: c.text }]}>主动关闭订单</Text>
-                        <Switch
-                          value={rule.auto_close_order}
-                          onValueChange={(v) => updateDdRule(rule.rule_code, { auto_close_order: v })}
-                          trackColor={{ false: c.border, true: c.primary }}
-                          thumbColor="#FFFFFF"
-                        />
-                      </View>
-                      {rule.auto_close_order && (
-                        <View style={styles.switchRow}>
-                          <Text style={[styles.switchLabel, { color: c.text }]}>关闭后只发卡券</Text>
-                          <Switch
-                            value={rule.only_card_after_close}
-                            onValueChange={(v) => updateDdRule(rule.rule_code, { only_card_after_close: v })}
-                            trackColor={{ false: c.border, true: c.primary }}
-                            thumbColor="#FFFFFF"
-                          />
-                        </View>
-                      )}
-                      <View style={styles.fieldGroup}>
-                        <Text style={[styles.fieldLabel, { color: c.textSecondary }]}>排除商品ID</Text>
-                        <Input
-                          value={rule.excluded_item_ids.join('\n')}
-                          onChangeText={(t) =>
-                            updateDdRule(rule.rule_code, { excluded_item_ids: t.split('\n') })
-                          }
-                          placeholder="每行一个商品ID，留空表示不排除"
-                          multiline
-                          style={styles.textarea}
-                        />
-                      </View>
-                    </>
-                  )}
-                </View>
-              ))}
-            </ScrollView>
-            <View style={styles.configActions}>
-              <Button
-                label="保存"
-                onPress={saveDeliveryDisabled}
-                loading={ddSaving}
-                disabled={ddSaving}
-                style={styles.configBtn}
-              />
-            </View>
-          </>
-        )}
-      </FormModal>
-
-      {/* 退款订单注销 Modal */}
-      <FormModal
-        visible={rcVisible}
-        onClose={closeRc}
-        title="退款订单注销"
-        contentStyle={styles.configSheet}
-      >
-        {rcLoading ? (
-          <View style={styles.configLoadingBox}>
-            <ActivityIndicator size="large" color={c.primary} />
-            <Text style={[styles.configLoadingText, { color: c.textSecondary }]}>
-              加载配置中...
-            </Text>
-          </View>
-        ) : (
-          <>
-            <ScrollView
-              style={styles.configScroll}
-              contentContainerStyle={styles.configBody}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-            >
-              <View style={[styles.switchRow, { borderTopColor: c.borderLight }]}>
-                <Text style={[styles.switchLabel, { color: c.text }]}>开启退款订单注销</Text>
-                <Switch
-                  value={rcEnabled}
-                  onValueChange={setRcEnabled}
-                  trackColor={{ false: c.border, true: c.primary }}
-                  thumbColor="#FFFFFF"
-                />
-              </View>
-              <View style={styles.fieldGroup}>
-                <Text style={[styles.fieldLabel, { color: c.textSecondary }]}>请求URL</Text>
-                <Input
-                  value={rcUrl}
-                  onChangeText={(t) => {
-                    setRcUrl(t);
-                    // URL 清空时自动关闭开关，保证"无URL时开关必关"
-                    if (!t.trim() && rcEnabled) setRcEnabled(false);
-                  }}
-                  placeholder="https://example.com/cancel"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  keyboardType="url"
-                />
-                <Text style={[styles.hintText, { color: c.textMuted }]}>
-                  POST 表单，参数 delivery_content、link_url，每个发货内容调一次
-                </Text>
-              </View>
-              <View style={styles.fieldGroup}>
-                <Text style={[styles.fieldLabel, { color: c.textSecondary }]}>超时时间(秒)</Text>
-                <Input
-                  value={rcTimeout}
-                  onChangeText={setRcTimeout}
-                  placeholder="60"
-                  keyboardType="number-pad"
-                />
-              </View>
-            </ScrollView>
-            <View style={styles.configActions}>
-              <Button
-                label="保存"
-                onPress={saveRefundCancel}
-                loading={rcSaving}
-                disabled={rcSaving}
-                style={styles.configBtn}
-              />
-            </View>
-          </>
-        )}
-      </FormModal>
-
       {/* 密码登录 Modal */}
       {pwdLoginAccount && (
         <PasswordLoginModal
@@ -3051,13 +2504,7 @@ const styles = StyleSheet.create({
   batchCount: { ...typography.body, fontWeight: '600' },
   batchBtn: { minHeight: 36, paddingVertical: spacing.xs, paddingHorizontal: spacing.sm },
   // 同意后发货配置
-  agreeEntryHint: { ...typography.caption },
-  agreeLoadingBox: { alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.xl },
-  agreeLoadingText: { ...typography.caption },
-  agreeTextarea: { minHeight: 90, textAlignVertical: 'top', paddingTop: spacing.sm },
-  agreeUrlRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  agreeUrlInput: { flex: 1 },
-  agreeSuggestBtn: { minHeight: 50, paddingHorizontal: spacing.md },
+  entryHint: { ...typography.caption },
   agreeUrlHint: { ...typography.small },
   // AI设置 / 默认回复 共用样式
   configSheet: { height: '85%' },

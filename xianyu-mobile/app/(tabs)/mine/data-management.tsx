@@ -10,7 +10,6 @@ const TABLE_OPTIONS = [
   { key: 'default_replies', label: '默认回复' },
   { key: 'keywords', label: '关键词' },
   { key: 'cookies', label: '账号' },
-  { key: 'cards', label: '卡券' },
   { key: 'orders', label: '订单' },
   { key: 'item_info', label: '商品信息' },
   { key: 'notification_channels', label: '通知渠道' },

@@ -16,7 +16,6 @@ import {
   Layers,
   LayoutDashboard,
   LineChart,
-  Link2,
   LogIn,
   MapPin,
   Megaphone,
@@ -24,9 +23,7 @@ import {
   MessageSquare,
   MessageSquarePlus,
   Package,
-  PackageCheck,
   PackageSearch,
-  Repeat,
   ScrollText,
   Send,
   Settings,
@@ -35,11 +32,9 @@ import {
   Star,
   Store,
   Tags,
-  Ticket,
   Timer,
   UserCog,
   Users,
-  Wallet,
 } from 'lucide-react'
 
 export interface NavItem {
@@ -87,22 +82,7 @@ export const mainNavItems: NavEntry[] = [
   { key: 'accounts', icon: Users, label: '账号管理', path: '/accounts' },
   { key: 'online-chat-new', icon: MessageSquare, label: '在线聊天', path: '/online-chat-new' },
   { key: 'items', icon: Package, label: '商品管理', path: '/items' },
-  { key: 'cards', icon: Ticket, label: '卡券管理', path: '/cards' },
   { key: 'orders', icon: ShoppingCart, label: '订单管理', path: '/orders' },
-  {
-    key: 'distribution',
-    icon: PackageSearch,
-    label: '分销管理',
-    children: [
-      { key: 'distribution-sources', icon: Link2, label: '货源管理', path: '/distribution/sources' },
-      { key: 'distribution-supply', icon: PackageSearch, label: '货源广场', path: '/distribution/supply' },
-      { key: 'distribution-card-pickup', icon: Ticket, label: '分销卡券', path: '/distribution/card-pickup' },
-      { key: 'distribution-docked', icon: PackageCheck, label: '对接的商品', path: '/distribution/docked' },
-      { key: 'distribution-agent-orders', icon: ShoppingCart, label: '代理订单', path: '/distribution/agent-orders' },
-      { key: 'distribution-dealers', icon: Users, label: '分销商管理', path: '/distribution/dealers' },
-      { key: 'distribution-sub-dealers', icon: Users, label: '下级分销商', path: '/distribution/sub-dealers' },
-    ],
-  },
   {
     key: 'product-publish',
     icon: Store,
@@ -149,7 +129,6 @@ export const adminNavItems: NavEntry[] = [
     adminOnly: true,
     children: [
       { key: 'admin-system-logs', icon: FileText, label: '系统日志', path: '/admin/logs', adminOnly: true },
-      { key: 'admin-redelivery-batches', icon: Repeat, label: '补发货日志', path: '/admin/redelivery-batches', adminOnly: true },
       { key: 'admin-account-login-logs', icon: LogIn, label: '账号登录日志', path: '/admin/account-login-logs', adminOnly: true },
       { key: 'admin-rate-batches', icon: Star, label: '补评价日志', path: '/admin/rate-batches', adminOnly: true },
       { key: 'admin-polish-batches', icon: Star, label: '擦亮日志', path: '/admin/polish-batches', adminOnly: true },
@@ -165,7 +144,6 @@ export const adminNavItems: NavEntry[] = [
   { key: 'admin-scheduled-tasks', icon: Timer, label: '定时任务', path: '/admin/scheduled-tasks', adminOnly: true },
   { key: 'admin-announcements', icon: Megaphone, label: '公告管理', path: '/admin/announcements', adminOnly: true },
   { key: 'admin-popup-announcements', icon: Megaphone, label: '弹窗公告', path: '/admin/popup-announcements', adminOnly: true },
-  { key: 'admin-fund-flows', icon: Wallet, label: '资金流水', path: '/admin/fund-flows', adminOnly: true },
 ]
 
 export const bottomNavItems: NavItem[] = [

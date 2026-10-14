@@ -16,7 +16,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.scheduled_polish_log import ScheduledPolishLog
 from common.models.scheduled_rate_log import ScheduledRateLog
-from common.models.scheduled_redelivery_log import ScheduledRedeliveryLog
 from common.models.scheduled_red_flower_log import ScheduledRedFlowerLog
 from common.models.scheduled_token_renewal_log import ScheduledTokenRenewalLog
 
@@ -236,34 +235,6 @@ class ScheduledBatchLogService:
             "failed_count": int(summary.failed_count or 0),
             "logs": logs,
         }
-
-    async def list_redelivery_batches(
-        self,
-        *,
-        start_date: str | None,
-        end_date: str | None,
-        page: int,
-        page_size: int,
-    ) -> tuple[list[dict[str, Any]], int]:
-        """分页查询补发货批次列表。"""
-        return await self._list_batches(
-            model=ScheduledRedeliveryLog,
-            start_date=start_date,
-            end_date=end_date,
-            page=page,
-            page_size=page_size,
-            total_key="total_orders",
-        )
-
-    async def get_redelivery_batch_detail(self, batch_id: str) -> dict[str, Any] | None:
-        """查询补发货批次详情。"""
-        return await self._get_batch_detail(
-            model=ScheduledRedeliveryLog,
-            batch_id=batch_id,
-            total_key="total_orders",
-            detail_key="order_no",
-            detail_column=ScheduledRedeliveryLog.order_no,
-        )
 
     async def list_token_renewal_batches(
         self,

@@ -30,7 +30,7 @@ const INDEPENDENT_SYSTEM_SETTING_KEYS = [
 ]
 const DEFAULT_DISCLAIMER_SETTINGS: DisclaimerSettings = {
   'disclaimer.title': '免责声明',
-  'disclaimer.content': '数据存储说明\n1. 本系统在运行过程中，为保障服务正常运行，会存储用户账号密码、登录 Cookie、商品信息、卡券信息等业务数据。\n2. 上述数据仅用于系统功能运行、自动化处理和业务管理，不作为其他用途。\n3. 请您自行确认服务器环境、账号权限和数据保管措施的安全性。\n\n用户须知\n1. 用户应确保使用本系统的行为符合相关平台规则和法律法规。\n2. 因用户自身违规操作、账号共享、密码泄露、服务器安全问题导致的损失，由用户自行承担。\n3. 建议用户定期备份重要数据，因系统故障、第三方平台变更、不可抗力等导致的异常或损失，本系统不承担责任。\n4. 本系统依赖第三方平台接口和网络环境，无法保证服务始终连续、稳定、无中断。\n\n隐私与风险提示\n1. 请勿在未充分评估风险的情况下接入生产环境或敏感账号。\n2. 使用本系统即表示您已充分理解并接受相关风险，并愿意自行承担相应责任。',
+  'disclaimer.content': '数据存储说明\n1. 本系统在运行过程中，为保障服务正常运行，会存储用户账号密码、登录 Cookie、商品信息、订单信息等业务数据。\n2. 上述数据仅用于系统功能运行、自动化处理和业务管理，不作为其他用途。\n3. 请您自行确认服务器环境、账号权限和数据保管措施的安全性。\n\n用户须知\n1. 用户应确保使用本系统的行为符合相关平台规则和法律法规。\n2. 因用户自身违规操作、账号共享、密码泄露、服务器安全问题导致的损失，由用户自行承担。\n3. 建议用户定期备份重要数据，因系统故障、第三方平台变更、不可抗力等导致的异常或损失，本系统不承担责任。\n4. 本系统依赖第三方平台接口和网络环境，无法保证服务始终连续、稳定、无中断。\n\n隐私与风险提示\n1. 请勿在未充分评估风险的情况下接入生产环境或敏感账号。\n2. 使用本系统即表示您已充分理解并接受相关风险，并愿意自行承担相应责任。',
   'disclaimer.checkbox_text': '我已阅读并同意以上免责声明',
   'disclaimer.agree_button_text': '同意并继续',
   'disclaimer.disagree_button_text': '不同意',
@@ -314,67 +314,9 @@ export const updateProxySettings = async (settings?: Partial<SystemSettings> | n
   return { success: true, message: '代理设置已保存' }
 }
 
-// ========== 分销设置（独立保存） ==========
-
-// 独立保存分销设置：只提交 distribution.* 相关键，不触碰其他设置
-// 与页面右上角"保存设置"按钮分离，避免影响其他未改动的设置
-export const updateDistributionSettings = async (settings?: Partial<SystemSettings> | null): Promise<ApiResponse> => {
-  const feeType = settings?.['distribution.fee_type']
-  const feeRate = settings?.['distribution.fee_rate']
-
-  const payload: Record<string, string> = {
-    'distribution.fee_type': typeof feeType === 'string' && feeType ? feeType : 'fixed',
-    'distribution.fee_rate': typeof feeRate === 'string' ? feeRate : '',
-  }
-
-  for (const [key, value] of Object.entries(payload)) {
-    try {
-      const result = await put<ApiResponse>(`${SYSTEM_SETTINGS_PREFIX}/${key}`, { value })
-      if (!result?.success) {
-        return result || { success: false, message: '分销设置保存失败' }
-      }
-    } catch (error) {
-      return { success: false, message: (error as Error)?.message || '分销设置保存失败' }
-    }
-  }
-
-  return { success: true, message: '分销设置已保存' }
-}
-
 // 修改密码
 export const changePassword = async (data: { current_password: string; new_password: string }): Promise<ApiResponse> => {
   return post(`${USERS_PREFIX}/change-password`, data)
-}
-
-// 获取当前登录用户信息（含到期日）
-export interface CurrentUserProfile {
-  id: number
-  username: string
-  email?: string
-  phone?: string
-  role?: string
-  status?: string
-  account_limit?: number | null
-  last_login_at?: string | null
-  expire_at?: string | null
-}
-
-export const getCurrentUserProfile = async (): Promise<CurrentUserProfile> => {
-  return get(`${USERS_PREFIX}/me`)
-}
-
-// 账户续期：按系统设置的续期单价扣减余额并延长到期日
-export interface RenewMembershipResult {
-  months: number
-  unit_price: string
-  total: string
-  balance_before: string
-  balance_after: string
-  expire_at: string | null
-}
-
-export const renewMembership = async (months: number): Promise<ApiResponse<RenewMembershipResult>> => {
-  return post(`${USERS_PREFIX}/renew`, { months })
 }
 
 // 获取备份文件列表（管理员）
@@ -445,47 +387,14 @@ export const testLocationChatRemoteApi = async (
   })
 }
 
-// 一键创建对接卡密秘钥（后端调用外部密钥服务创建并自动保存到当前用户）
-export const createCardSecretKey = async (): Promise<ApiResponse<{ key_value: string }>> => {
-  return post('/api/v1/user-settings/card-secret-key/create')
-}
+// ========== 外部接口秘钥管理 ==========
 
-// 上传收款码
-export const uploadPaymentQrcode = async (file: File, paymentType: 'alipay' | 'wechat'): Promise<{
-  success: boolean
-  message?: string
-  data?: { image_url: string; payment_type: string }
-}> => {
-  const formData = new FormData()
-  formData.append('file', file)
-  formData.append('payment_type', paymentType)
-  return post('/api/v1/user-settings/payment-qrcode/upload', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
-  })
-}
-
-
-// ========== 对接码管理 ==========
-
-// 获取对接码
-export const getDockCode = async (): Promise<{ success: boolean; dock_code?: string }> => {
-  return get(`${USERS_PREFIX}/dock-code`)
-}
-
-// 重置对接码
-export const resetDockCode = async (): Promise<ApiResponse> => {
-  return post(`${USERS_PREFIX}/dock-code/reset`)
-}
-
-
-// ========== 分销秘钥管理 ==========
-
-// 获取分销秘钥（无则自动生成）
+// 获取外部接口秘钥（无则自动生成）
 export const getSecretKey = async (): Promise<{ success: boolean; secret_key?: string }> => {
   return get(`${USERS_PREFIX}/secret-key`)
 }
 
-// 更换分销秘钥
+// 更换外部接口秘钥
 export const resetSecretKey = async (): Promise<ApiResponse<{ secret_key: string }>> => {
   return post(`${USERS_PREFIX}/secret-key/reset`)
 }

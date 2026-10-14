@@ -30,7 +30,6 @@ from common.services.item_offline_service import batch_offline_items_from_xianyu
 from common.services.item_delete_service import batch_delete_items_from_xianyu
 from app.services.account_service import AccountService
 from app.services.item_service import ItemService
-from app.services.selectable_item_service import SelectableItemService
 from app.services.xianyu_item_edit_service import edit_seller_item, fetch_seller_item_edit_detail
 from common.services.managed_item_edit_service import ManagedItemEditService
 
@@ -118,7 +117,6 @@ async def list_items_paginated(
     keyword: str | None = Query(default=None, description="关键字（支持商品ID、标题、详情）"),
     is_polished: bool | None = Query(default=None, description="是否擦亮筛选"),
     is_multi_spec: bool | None = Query(default=None, description="多规格筛选"),
-    multi_quantity_delivery: bool | None = Query(default=None, description="多数量发货筛选"),
     show_history: bool = Query(default=False, description="显式显示历史或来源待确认商品"),
     current_user: User = Depends(deps.get_current_active_user),
     item_service: ItemService = Depends(deps.get_item_service),
@@ -131,7 +129,6 @@ async def list_items_paginated(
     - keyword: 关键字（商品ID、标题、详情）
     - is_polished: 是否擦亮（true/false）
     - is_multi_spec: 多规格（true/false）
-    - multi_quantity_delivery: 多数量发货（true/false）
     """
     owner_id, _ = resolve_owner_scope(current_user)
     items, total = await item_service.list_items_paginated(
@@ -142,7 +139,6 @@ async def list_items_paginated(
         keyword=keyword,
         is_polished=is_polished,
         is_multi_spec=is_multi_spec,
-        multi_quantity_delivery=multi_quantity_delivery,
         show_history=show_history,
     )
     
@@ -154,43 +150,6 @@ async def list_items_paginated(
         "page_size": page_size,
         "total_pages": (total + page_size - 1) // page_size if total > 0 else 0,
     }
-
-
-@items_router.get("/selectable/all")
-async def list_selectable_items_all(
-    keyword: str | None = Query(default=None, max_length=255, description="关键字（商品ID/标题）"),
-    current_user: User = Depends(deps.get_current_active_user),
-    session: AsyncSession = Depends(deps.get_db_session),
-):
-    """卡券关联商品选择弹窗：获取全部匹配的可选商品轻量项（供「全选筛选结果」）
-
-    仅返回 item_id/title/price 轻字段，管理员可查看所有商品。
-    """
-    owner_id, _ = resolve_owner_scope(current_user)
-    items = await SelectableItemService(session).get_all_selectable_item_keys(
-        owner_id=owner_id,
-        search=keyword or "",
-    )
-    return {"list": items, "total": len(items)}
-
-
-@items_router.get("/by-card/{card_id}")
-async def list_items_by_card(
-    card_id: int,
-    current_user: User = Depends(deps.get_current_active_user),
-    session: AsyncSession = Depends(deps.get_db_session),
-):
-    """卡券关联商品选择弹窗：获取卡券已关联商品的轻量详情（供右侧「已选商品」展示）
-
-    仅返回 item_id/title/price；已删除商品不在此返回，选中态由
-    GET /cards/{card_id}/items 提供，保存时不丢失。
-    """
-    owner_id, _ = resolve_owner_scope(current_user)
-    items = await SelectableItemService(session).get_associated_items(
-        card_id=card_id,
-        owner_id=owner_id,
-    )
-    return {"list": items, "total": len(items)}
 
 
 @items_router.get("/cookie/{cookie_id}")
@@ -1016,30 +975,6 @@ async def retry_batch_seller_item_edit(
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return ApiResponse(success=True, message="批量编辑失败项已重新排程", data={"batch_id": new_batch_id, "status": "pending"})
-
-
-@items_router.put("/{cookie_id}/{item_id}/multi-quantity-delivery", response_model=ApiResponse)
-async def update_item_multi_quantity_delivery(
-    cookie_id: str,
-    item_id: str,
-    payload: dict,
-    current_user: User = Depends(deps.get_current_active_user),
-    account_service: AccountService = Depends(deps.get_account_service),
-    item_service: ItemService = Depends(deps.get_item_service),
-) -> ApiResponse:
-    """更新商品的多数量发货状态"""
-    # 管理员可以操作所有账号，普通用户只能操作自己的账号
-    owner_id, _ = resolve_owner_scope(current_user)
-
-    account = await account_service.get_account_for_user(owner_id, cookie_id)
-    if not account:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="账号不存在")
-    multi_quantity_delivery = payload.get("multi_quantity_delivery", False)
-    updated = await item_service.update_item(account, item_id, {"multi_quantity_delivery": multi_quantity_delivery})
-    if not updated:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="商品不存在")
-    status_text = "开启" if multi_quantity_delivery else "关闭"
-    return ApiResponse(success=True, message=f"商品多数量发货状态已{status_text}")
 
 
 class ItemDeleteRequest(PydanticBaseModel):

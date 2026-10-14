@@ -20,8 +20,6 @@ from app.core.config import get_settings
 from app.core.http_client import get_http_client
 from app.services.auto_reply_stats_service import AutoReplyStatsService
 from app.services.dashboard_stats_cache_service import DashboardStatsCacheService
-from common.models.agent_order import AgentOrder
-from common.models.card import Card
 from common.models.user import User
 from common.models.xy_account import XYAccount
 from common.models.xy_keyword_rule import XYKeywordRule
@@ -187,9 +185,6 @@ class DashboardStatsService:
         ).select_from(XYOrder)
         orders_row = (await self.session.execute(orders_stmt)).one()
 
-        cards_stmt = select(func.count()).select_from(Card)
-        total_cards = int((await self.session.execute(cards_stmt)).scalar() or 0)
-
         reply_stats = await AutoReplyStatsService(self.session).get_today_and_yesterday_success_reply_counts()
 
         today_users_stmt = select(func.count()).select_from(User).where(User.created_at >= today_start)
@@ -209,9 +204,6 @@ class DashboardStatsService:
         placed_row = await self._get_today_order_summary_row(time_column=XYOrder.placed_at, start_time=today_start)
         self._merge_order_summary_row(today_order_summary, placed_row)
 
-        today_agent_orders_stmt = select(func.count()).select_from(AgentOrder).where(AgentOrder.created_at >= today_start)
-        today_agent_orders = int((await self.session.execute(today_agent_orders_stmt)).scalar() or 0)
-
         return {
             "admin_stats": {
                 "total_users": total_users,
@@ -221,7 +213,6 @@ class DashboardStatsService:
                 "total_orders": int(orders_row.total_orders or 0),
                 "today_reply_count": int(reply_stats["today_reply_count"]),
                 "yesterday_reply_count": int(reply_stats["yesterday_reply_count"]),
-                "total_cards": total_cards,
                 "password_configured": int(accounts_row.password_configured or 0),
             },
             "today_stats": {
@@ -231,7 +222,6 @@ class DashboardStatsService:
                 "today_shipped": int(today_order_summary["today_shipped"]),
                 "today_pending": int(today_order_summary["today_pending"]),
                 "today_amount": round(float(today_order_summary["today_amount"]), 2),
-                "today_agent_orders": today_agent_orders,
             },
         }
 
@@ -361,7 +351,6 @@ class DashboardStatsService:
             "total_orders": int(admin_stats["total_orders"]),
             "today_reply_count": int(admin_stats["today_reply_count"]),
             "yesterday_reply_count": int(admin_stats["yesterday_reply_count"]),
-            "total_cards": int(admin_stats["total_cards"]),
             "password_configured": int(admin_stats["password_configured"]),
             "current_user_account_limit": limit_status["account_limit"],
             "current_user_used_account_count": int(limit_status["used_count"]),
@@ -380,7 +369,6 @@ class DashboardStatsService:
             "today_shipped": int(today_stats["today_shipped"]),
             "today_pending": int(today_stats["today_pending"]),
             "today_amount": round(float(today_stats["today_amount"]), 2),
-            "today_agent_orders": int(today_stats["today_agent_orders"]),
         }
 
     async def get_order_amount_trend(self, *, owner_id: int | None, days: int = 30) -> list[dict[str, int | float | str]]:

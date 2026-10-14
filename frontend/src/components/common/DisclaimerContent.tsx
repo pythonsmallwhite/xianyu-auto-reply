@@ -43,14 +43,6 @@ export function DisclaimerContent() {
               <li>• 用于商品管理和自动回复功能</li>
             </ul>
           </div>
-          
-          <div className="bg-slate-50 dark:bg-slate-700/50 rounded-lg p-3">
-            <h4 className="font-medium text-slate-900 dark:text-white">4. 卡券信息</h4>
-            <ul className="mt-1 space-y-1 text-slate-600 dark:text-slate-400">
-              <li>• 系统会保存用户配置的卡券/卡密信息</li>
-              <li>• 用于自动发货和订单处理功能</li>
-            </ul>
-          </div>
         </div>
       </section>
 

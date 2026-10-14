@@ -2,7 +2,7 @@
 公开账号查询接口。
 
 功能：
-1. 无需登录，使用个人设置中的分销秘钥校验身份。
+1. 无需登录，使用个人设置中的外部接口秘钥校验身份。
 2. 返回秘钥所属用户账号管理中全部账号的账号 ID、备注和启用状态。
 3. 禁用账号同样返回，通过 enabled 字段标识，且不影响其调用公开分类和发布接口。
 """
@@ -55,10 +55,10 @@ async def list_enabled_accounts(
     session: AsyncSession = Depends(get_db_session),
 ) -> ExternalApiResponse:
     """
-    根据分销秘钥获取所属用户全部账号（含禁用账号）。
+    根据外部接口秘钥获取所属用户全部账号（含禁用账号）。
 
     Args:
-        payload: 包含必填分销秘钥的请求体。
+        payload: 包含必填外部接口秘钥的请求体。
         session: 数据库会话。
     Returns:
         统一响应；成功数据包含 accounts、total、enabled_total 和 disabled_total。
@@ -95,7 +95,7 @@ async def get_account_capability(
     payload: AccountCapabilityRequest | None = Body(default=None),
     session: AsyncSession = Depends(get_db_session),
 ) -> ExternalApiResponse:
-    """根据分销秘钥和真实闲鱼账号查询发布能力。"""
+    """根据外部接口秘钥和真实闲鱼账号查询发布能力。"""
     secret_key, account_id, error = validate_identity_fields(
         payload.secret_key if payload else None,
         payload.account_id if payload else None,

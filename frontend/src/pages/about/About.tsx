@@ -55,7 +55,7 @@ export function About() {
               { title: '多账号管理', desc: '同时管理多个账号', icon: UserCheck, color: 'text-blue-500' },
               { title: '智能回复', desc: '关键词自动回复', icon: MessageSquare, color: 'text-green-500' },
               { title: 'AI 助手', desc: '智能处理复杂问题', icon: Bot, color: 'text-purple-500' },
-              { title: '自动发货', desc: '支持卡密发货', icon: Truck, color: 'text-orange-500' },
+              { title: '订单管理', desc: '无物流发货与取消订单', icon: Truck, color: 'text-orange-500' },
               { title: '消息通知', desc: '多渠道推送', icon: Bell, color: 'text-pink-500' },
               { title: '数据统计', desc: '订单商品分析', icon: BarChart3, color: 'text-cyan-500' },
             ].map((feature, index) => (

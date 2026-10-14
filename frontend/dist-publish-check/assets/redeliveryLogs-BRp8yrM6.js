@@ -1,0 +1,1 @@
+import{c as a}from"./batchLogFactory-BT6Abd0e.js";const e=a({batches:"redelivery-batches",clearLogs:"redelivery-logs/clear"}),c=e.getBatches,s=e.getBatchDetail,r=e.clearLogs;export{s as a,r as c,c as g};

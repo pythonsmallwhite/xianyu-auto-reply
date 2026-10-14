@@ -130,7 +130,6 @@ class OrderService:
         is_rated: bool | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
-        delivery_send_status: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[XYOrder], int, Dict[str, str]]:
@@ -148,7 +147,6 @@ class OrderService:
             is_rated: 是否已评价筛选
             start_date: 开始日期（YYYY-MM-DD）
             end_date: 结束日期（YYYY-MM-DD）
-            delivery_send_status: 关联自动发货消息日志的发送状态筛选（success/failed/unknown/timeout）
             page: 页码
             page_size: 每页数量
             
@@ -219,29 +217,6 @@ class OrderService:
             except ValueError:
                 logger.warning(f"无效的结束日期格式: {end_date}")
         
-        # 关联自动发货消息日志的发送状态筛选
-        # 取每个订单号最新一条自动发货日志（以 max(id) 近似最新，与发送状态展示口径一致），
-        # 再按发送状态过滤，使列表筛选结果与“发送状态”列显示保持一致。
-        if delivery_send_status and delivery_send_status.strip():
-            latest_log_subq = (
-                select(
-                    XYAutoReplyMessageLog.order_no.label("order_no"),
-                    func.max(XYAutoReplyMessageLog.id).label("max_id"),
-                )
-                .where(
-                    XYAutoReplyMessageLog.reply_strategy == "auto_delivery",
-                    XYAutoReplyMessageLog.order_no.isnot(None),
-                )
-                .group_by(XYAutoReplyMessageLog.order_no)
-                .subquery()
-            )
-            matched_order_nos = (
-                select(XYAutoReplyMessageLog.order_no)
-                .join(latest_log_subq, XYAutoReplyMessageLog.id == latest_log_subq.c.max_id)
-                .where(XYAutoReplyMessageLog.send_status == delivery_send_status.strip())
-            )
-            conditions.append(XYOrder.order_no.in_(matched_order_nos))
-        
         if conditions:
             base_stmt = base_stmt.where(and_(*conditions))
         
@@ -266,58 +241,6 @@ class OrderService:
         item_titles = await self._get_item_titles(owner_id, item_ids)
         
         return orders, total, item_titles
-
-    async def get_delivery_log_status_map(self, order_nos: list[str]) -> Dict[str, Dict[str, str | None]]:
-        """批量查询订单对应的自动发货消息日志发送状态
-
-        以订单号关联自动发货日志（reply_strategy == 'auto_delivery'），取每个订单号
-        最新一条日志的发送状态与发送失败原因，供订单列表关联展示。
-
-        Args:
-            order_nos: 订单号列表
-
-        Returns:
-            { 订单号: {"send_status": ..., "send_fail_reason": ...} }
-            没有对应日志的订单号不会出现在返回结果中。
-        """
-        result_map: Dict[str, Dict[str, str | None]] = {}
-        valid_order_nos = [no for no in order_nos if no]
-        if not valid_order_nos:
-            return result_map
-
-        try:
-            # 先取每个订单号最新一条自动发货日志的主键（max(id) 即最新插入），
-            # 再回查该日志的发送状态与失败原因，保证与"发送状态"筛选口径完全一致。
-            latest_log_subq = (
-                select(
-                    XYAutoReplyMessageLog.order_no.label("order_no"),
-                    func.max(XYAutoReplyMessageLog.id).label("max_id"),
-                )
-                .where(
-                    XYAutoReplyMessageLog.order_no.in_(valid_order_nos),
-                    XYAutoReplyMessageLog.reply_strategy == "auto_delivery",
-                )
-                .group_by(XYAutoReplyMessageLog.order_no)
-                .subquery()
-            )
-            stmt = (
-                select(
-                    XYAutoReplyMessageLog.order_no,
-                    XYAutoReplyMessageLog.send_status,
-                    XYAutoReplyMessageLog.send_fail_reason,
-                )
-                .join(latest_log_subq, XYAutoReplyMessageLog.id == latest_log_subq.c.max_id)
-            )
-            rows = (await self.session.execute(stmt)).all()
-            for order_no, send_status, send_fail_reason in rows:
-                result_map[order_no] = {
-                    "send_status": send_status,
-                    "send_fail_reason": send_fail_reason,
-                }
-        except Exception as e:
-            logger.error(f"查询订单自动发货日志发送状态失败: {e}")
-
-        return result_map
 
     async def get_order_by_id(self, order_no: str) -> Optional[XYOrder]:
         """根据订单号获取订单"""
@@ -496,7 +419,7 @@ class OrderService:
             order_no: 订单号
             status: 新状态
             delivery_method: 发货方式 (manual-手动发货, auto-自动发货, scheduled-定时发货)
-            delivery_content: 发货内容（卡券内容）
+            delivery_content: 发货内容
             buyer_fish_nick: 买家闲鱼昵称（明文）
             
         Returns:
@@ -525,96 +448,6 @@ class OrderService:
             return result.rowcount > 0
         except Exception as e:
             logger.error(f"更新订单发货信息失败: {e}")
-            await self.session.rollback()
-            return False
-
-    async def record_delivery_for_closed_order(
-        self,
-        order_no: str,
-        delivery_method: str,
-        delivery_content: str | None = None,
-        buyer_fish_nick: str | None = None,
-    ) -> bool:
-        """专为「禁止发货 + 主动关闭订单 + 关闭后只发卡券」场景设计的记录方法
-
-        与 update_order_delivery_info 的区别：
-          - 不修改 status：因为订单已经被卖家主动关闭（status 已由关闭流程更新），
-            这里再标记为 'shipped' 会导致与闲鱼平台真实状态冲突
-          - 写入 card_only_delivered：标记只发卡券流程已完成，供自动续售识别该场景
-          - 不清空 delivery_fail_reason：保留 pre_delivery_check_and_close 写入的
-            "禁止发货原因"，便于后续追溯为什么走了 card_only 流程
-
-        仅更新 delivery_method 和 delivery_content，让卖家能在订单详情看到补发的卡券内容。
-
-        Args:
-            order_no: 订单号
-            delivery_method: 发货方式（沿用 'auto' / 'manual' / 'scheduled' 等）
-            delivery_content: 补发的卡券内容（>2000 字会截断）
-            buyer_fish_nick: 买家闲鱼昵称（明文）
-
-        Returns:
-            是否更新成功
-        """
-        try:
-            if delivery_content and len(delivery_content) > 2000:
-                delivery_content = delivery_content[:1997] + "..."
-
-            values = {
-                "card_only_delivered": True,
-                "delivery_method": delivery_method,
-                "delivery_content": delivery_content,
-            }
-            if buyer_fish_nick:
-                values["buyer_fish_nick"] = buyer_fish_nick
-
-            stmt = (
-                update(XYOrder)
-                .where(XYOrder.order_no == order_no)
-                .values(**values)
-            )
-            result = await self.session.execute(stmt)
-            await self.session.commit()
-            return result.rowcount > 0
-        except Exception as e:
-            logger.error(f"记录已关闭订单的卡券补发信息失败: {e}")
-            await self.session.rollback()
-            return False
-
-    async def record_card_only_delivery(
-        self,
-        order_no: str,
-        delivery_method: str,
-        delivery_content: str | None = None,
-        buyer_fish_nick: str | None = None,
-    ) -> bool:
-        """记录账号级“只发卡券”已处理结果，不伪造闲鱼平台订单状态。
-
-        卡券内容在调用本方法前可能已经从库存/API 中取出，因此即使消息发送失败也要
-        持久化防重标记和内容，避免定时任务再次消费一张新卡券。失败原因由调用方随后写入。
-        """
-        try:
-            if delivery_content and len(delivery_content) > 2000:
-                delivery_content = delivery_content[:1997] + "..."
-
-            values = {
-                "card_only_delivered": True,
-                "delivery_method": delivery_method,
-                "delivery_content": delivery_content,
-                "delivery_fail_reason": None,
-            }
-            if buyer_fish_nick:
-                values["buyer_fish_nick"] = buyer_fish_nick
-
-            stmt = (
-                update(XYOrder)
-                .where(XYOrder.order_no == order_no)
-                .values(**values)
-            )
-            result = await self.session.execute(stmt)
-            await self.session.commit()
-            return result.rowcount > 0
-        except Exception as e:
-            logger.error(f"记录只发卡券结果失败: {e}")
             await self.session.rollback()
             return False
 
@@ -1669,14 +1502,11 @@ class OrderService:
 
     async def _fetch_refund_orders_impl(self, account) -> dict:
         """获取退款订单实际实现（调用方需已持有账号锁）"""
-        from common.services.refund_cancel_service import process_order_unregister
-
         cookies_str = account.cookie
         total_fetched = 0
         updated = 0
         failed = 0
         errors = []
-        processed_order_nos = []
 
         # disputeStatus → 本地状态：1/2/3=退款中，5=退款成功
         for dispute_status, status in (('1', 'refunding'), ('2', 'refunding'), ('3', 'refunding'), ('5', 'refunded')):
@@ -1703,19 +1533,10 @@ class OrderService:
                     total_fetched += 1
                     if result in ('updated', 'inserted'):
                         updated += 1
-                    if parsed['order_no'] not in processed_order_nos:
-                        processed_order_nos.append(parsed['order_no'])
                 except Exception as e:
                     await self.session.rollback()
                     failed += 1
                     logger.error(f"处理退款订单 {parsed.get('order_no')} 异常: {e}")
-
-        # 对获取到的退款订单触发注销（统一逻辑，内部判断账号开关/发货内容为空/已注销）
-        for order_no in processed_order_nos:
-            try:
-                await process_order_unregister(account.account_id, order_no)
-            except Exception as e:
-                logger.error(f"退款订单 {order_no} 触发注销异常: {e}")
 
         logger.info(
             f"获取退款订单完成: 账号 {account.account_id} 处理{total_fetched}条, 更新{updated}条, 失败{failed}"

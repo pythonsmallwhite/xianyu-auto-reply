@@ -144,7 +144,6 @@ export function AutoReplyLogs() {
   const [selectedItemId, setSelectedItemId] = useState('')
   const [selectedRuleType, setSelectedRuleType] = useState('')
   const [selectedSendStatus, setSelectedSendStatus] = useState('')
-  const [messageType, setMessageType] = useState('auto_reply')
   const [startDate, setStartDate] = useState(today)
   const [endDate, setEndDate] = useState(today)
   const [page, setPage] = useState(1)
@@ -184,9 +183,9 @@ export function AutoReplyLogs() {
         item_id: selectedItemId.trim() || undefined,
         start_date: startDate || undefined,
         end_date: endDate || undefined,
-        matched_rule_type: messageType === 'auto_delivery' ? undefined : (selectedRuleType || undefined),
+        matched_rule_type: selectedRuleType || undefined,
         send_status: selectedSendStatus || undefined,
-        message_type: messageType,
+        message_type: 'auto_reply',
         page: nextPage,
         page_size: nextPageSize,
       })
@@ -283,33 +282,20 @@ export function AutoReplyLogs() {
               <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="input-ios" />
             </div>
             <div className="input-group min-w-[160px]">
-              <label className="input-label">消息类型</label>
+              <label className="input-label">规则类型</label>
               <select
-                value={messageType}
-                onChange={(e) => setMessageType(e.target.value)}
+                value={selectedRuleType}
+                onChange={(e) => setSelectedRuleType(e.target.value)}
                 className="input-ios"
               >
-                <option value="auto_reply">自动回复</option>
-                <option value="auto_delivery">自动发货</option>
+                <option value="">全部类型</option>
+                <option value="keyword_item">商品关键词</option>
+                <option value="keyword_common">通用关键词</option>
+                <option value="ai">AI回复</option>
+                <option value="default_item">商品默认回复</option>
+                <option value="default_account">账号默认回复</option>
               </select>
             </div>
-            {messageType !== 'auto_delivery' && (
-              <div className="input-group min-w-[160px]">
-                <label className="input-label">规则类型</label>
-                <select
-                  value={selectedRuleType}
-                  onChange={(e) => setSelectedRuleType(e.target.value)}
-                  className="input-ios"
-                >
-                  <option value="">全部类型</option>
-                  <option value="keyword_item">商品关键词</option>
-                  <option value="keyword_common">通用关键词</option>
-                  <option value="ai">AI回复</option>
-                  <option value="default_item">商品默认回复</option>
-                  <option value="default_account">账号默认回复</option>
-                </select>
-              </div>
-            )}
             <div className="input-group min-w-[160px]">
               <label className="input-label">发送状态</label>
               <select

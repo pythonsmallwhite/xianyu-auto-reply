@@ -17,9 +17,6 @@ export interface AdminUserApiItem {
   is_admin: boolean
   account_limit?: number | null
   cookie_count?: number
-  card_count?: number
-  balance?: string | null
-  expire_at?: string | null
 }
 
 export interface CreateAdminUserPayload {
@@ -30,8 +27,6 @@ export interface CreateAdminUserPayload {
   role: UserRole
   status: UserStatus
   account_limit: number | null
-  // 到期日（北京时间，格式 'YYYY-MM-DDTHH:MM:SS'）。null 表示永不过期。
-  expire_at?: string | null
 }
 
 export interface UpdateAdminUserPayload {
@@ -42,8 +37,6 @@ export interface UpdateAdminUserPayload {
   role?: UserRole
   status?: UserStatus
   account_limit?: number | null
-  // 到期日（北京时间，格式 'YYYY-MM-DDTHH:MM:SS'）。显式传 null 表示清空到期日。
-  expire_at?: string | null
 }
 
 const mapAdminUser = (user: AdminUserApiItem): User => ({
@@ -55,8 +48,6 @@ const mapAdminUser = (user: AdminUserApiItem): User => ({
   status: user.status,
   is_admin: user.is_admin,
   account_limit: user.account_limit,
-  balance: user.balance,
-  expire_at: user.expire_at,
 })
 
 // 获取用户列表
@@ -92,20 +83,6 @@ export const updateUser = (userId: number, payload: UpdateAdminUserPayload): Pro
 // 停用用户
 export const deleteUser = (userId: number): Promise<ApiResponse> => {
   return del(`${ADMIN_PREFIX}/users/${userId}`)
-}
-
-// 管理员手动调整用户余额（正数充值 / 负数扣减）
-export interface AdminRechargeResult {
-  balance_before: string
-  balance_after: string
-  amount: string
-}
-
-export const rechargeUser = (
-  userId: number,
-  payload: { amount: string; remark?: string },
-): Promise<ApiResponse<AdminRechargeResult>> => {
-  return post(`${ADMIN_PREFIX}/users/${userId}/recharge`, payload)
 }
 
 // ========== 系统日志 ==========
@@ -467,7 +444,6 @@ export const clearTableData = (tableName: string): Promise<ApiResponse> => {
 export interface AdminStats {
   total_users: number
   total_cookies: number
-  total_cards: number
   total_keywords: number
   total_orders: number
   today_reply_count: number
@@ -487,7 +463,6 @@ export interface TodayStats {
   today_shipped: number
   today_pending: number
   today_amount: number
-  today_agent_orders: number
 }
 
 // 获取管理员统计数据

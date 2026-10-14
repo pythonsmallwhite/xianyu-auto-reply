@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Users as UsersIcon, RefreshCw, Plus, ChevronLeft, ChevronRight, Loader2, Pencil, Power, PowerOff, Wallet, Search, X } from 'lucide-react'
+import { Users as UsersIcon, RefreshCw, Plus, ChevronLeft, ChevronRight, Loader2, Pencil, Power, PowerOff, Search, X } from 'lucide-react'
 import { getUsers, deleteUser, updateUser } from '@/api/admin'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
 import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { UserFormModal } from './UserFormModal'
-import { UserRechargeModal } from './UserRechargeModal'
 import { getApiErrorMessage } from '@/utils/request'
 import type { User } from '@/types'
 
@@ -30,20 +29,6 @@ const statusClassMap: Record<string, string> = {
   DELETED: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300',
 }
 
-// 格式化到期日展示（后端为北京时间 naive 字符串，无需做时区转换）
-const formatExpireAt = (value?: string | null): string => {
-  if (!value) return '永不过期'
-  // 形如 '2026-06-25T14:30:00' -> '2026-06-25 14:30:00'
-  return value.replace('T', ' ').slice(0, 19)
-}
-
-// 判断是否已到期（到期日存在且早于当前时间）
-const isExpired = (value?: string | null): boolean => {
-  if (!value) return false
-  const time = new Date(value).getTime()
-  return Number.isFinite(time) && time < Date.now()
-}
-
 export function Users() {
   const { addToast } = useUIStore()
   const { isAuthenticated, token, _hasHydrated, user: currentUser, updateUser: updateAuthUser } = useAuthStore()
@@ -62,7 +47,6 @@ export function Users() {
   const [statusSubmitting, setStatusSubmitting] = useState(false)
   const [showFormModal, setShowFormModal] = useState(false)
   const [editingUser, setEditingUser] = useState<User | null>(null)
-  const [rechargingUser, setRechargingUser] = useState<User | null>(null)
 
   const loadUsers = async () => {
     if (!_hasHydrated || !isAuthenticated || !token) return
@@ -228,8 +212,6 @@ export function Users() {
                 <th>手机号</th>
                 <th>角色</th>
                 <th>可添加账号数</th>
-                <th>余额</th>
-                <th>到期日</th>
                 <th>状态</th>
                 <th>操作</th>
               </tr>
@@ -237,7 +219,7 @@ export function Users() {
             <tbody>
               {users.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="text-center py-8 text-slate-500 dark:text-slate-400">
+                  <td colSpan={8} className="text-center py-8 text-slate-500 dark:text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <UsersIcon className="w-12 h-12 text-slate-300 dark:text-slate-600" />
                       <p>{appliedUsername ? `未找到用户名包含「${appliedUsername}」的用户` : '暂无用户数据'}</p>
@@ -257,11 +239,6 @@ export function Users() {
                       </span>
                     </td>
                     <td className="text-slate-500 dark:text-slate-400">{user.account_limit ?? '-'}</td>
-                    <td className="font-medium text-slate-700 dark:text-slate-300 tabular-nums">¥{user.balance ?? '0.00'}</td>
-                    <td className={`whitespace-nowrap text-sm ${isExpired(user.expire_at) ? 'text-red-500 font-medium' : 'text-slate-500 dark:text-slate-400'}`}>
-                      {formatExpireAt(user.expire_at)}
-                      {isExpired(user.expire_at) && <span className="ml-1">(已到期)</span>}
-                    </td>
                     <td>
                       <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${statusClassMap[user.status || 'ACTIVE'] || statusClassMap.ACTIVE}`}>
                         {statusLabelMap[user.status || 'ACTIVE'] || '正常'}
@@ -276,14 +253,6 @@ export function Users() {
                         >
                           <Pencil className="w-4 h-4" />
                           编辑
-                        </button>
-                        <button
-                          onClick={() => setRechargingUser(user)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg hover:bg-amber-50 dark:hover:bg-amber-900/20 text-amber-600 dark:text-amber-400 transition-colors"
-                          title="余额调整"
-                        >
-                          <Wallet className="w-4 h-4" />
-                          余额调整
                         </button>
                         {user.status === 'INACTIVE' ? (
                           <button
@@ -392,16 +361,6 @@ export function Users() {
         onCancel={closeStatusConfirm}
       />
 
-      {rechargingUser && (
-        <UserRechargeModal
-          user={rechargingUser}
-          onClose={() => setRechargingUser(null)}
-          onSuccess={() => {
-            setRechargingUser(null)
-            loadUsers()
-          }}
-        />
-      )}
     </div>
   )
 }

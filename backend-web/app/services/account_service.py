@@ -78,10 +78,8 @@ class AccountService:
         page_size: int = 20,
         status: str | None = None,
         ai_reply: bool | None = None,
-        scheduled_redelivery: bool | None = None,
         scheduled_rate: bool | None = None,
         auto_polish: bool | None = None,
-        auto_confirm: bool | None = None,
         has_password: bool | None = None,
         disable_reason: str | None = None,
         account_id: str | None = None,
@@ -97,10 +95,8 @@ class AccountService:
             page_size: 每页数量
             status: 状态筛选（active/inactive）
             ai_reply: AI回复开关筛选
-            scheduled_redelivery: 定时补发货筛选
             scheduled_rate: 定时补评价筛选
             auto_polish: 商品擦亮筛选
-            auto_confirm: 自动确认收货筛选
             has_password: 是否配置密码筛选
             disable_reason: 禁用原因模糊搜索关键词（LIKE %keyword%）
             account_id: 账号ID模糊搜索关键词（LIKE %keyword%）
@@ -154,10 +150,6 @@ class AccountService:
                     )
                 )
         
-        # 定时补发货筛选
-        if scheduled_redelivery is not None:
-            conditions.append(XYAccount.scheduled_redelivery == scheduled_redelivery)
-        
         # 定时补评价筛选
         if scheduled_rate is not None:
             conditions.append(XYAccount.scheduled_rate == scheduled_rate)
@@ -165,10 +157,6 @@ class AccountService:
         # 商品擦亮筛选
         if auto_polish is not None:
             conditions.append(XYAccount.auto_polish == auto_polish)
-        
-        # 自动确认收货筛选
-        if auto_confirm is not None:
-            conditions.append(XYAccount.auto_confirm == auto_confirm)
         
         # 禁用原因模糊搜索（忽略空白字符串；ilike 大小写不敏感，自动参数化避免 SQL 注入；与项目其它筛选保持风格一致）
         if disable_reason is not None:
@@ -386,17 +374,6 @@ class AccountService:
         self.session.add(account)
         await self.session.commit()
 
-    async def update_auto_confirm(self, account: XYAccount, auto_confirm: bool) -> None:
-        values = {"auto_confirm": auto_confirm}
-        if auto_confirm:
-            values["only_send_card"] = False
-        stmt = update(XYAccount).where(XYAccount.id == account.id).values(**values)
-        await self.session.execute(stmt)
-        await self.session.commit()
-        account.auto_confirm = auto_confirm
-        if auto_confirm:
-            account.only_send_card = False
-
     async def update_publish_capacity(self, account: XYAccount, remaining: int) -> bool:
         """Set the observed remaining allowance without releasing in-flight holds."""
         result = await self.session.execute(
@@ -442,12 +419,6 @@ class AccountService:
             account.login_password = login_password
         if show_browser is not None:
             account.show_browser = show_browser
-        self.session.add(account)
-        await self.session.commit()
-
-    async def update_scheduled_redelivery(self, account: XYAccount, scheduled_redelivery: bool) -> None:
-        """更新定时补发货开关"""
-        account.scheduled_redelivery = scheduled_redelivery
         self.session.add(account)
         await self.session.commit()
 
@@ -614,50 +585,6 @@ class AccountService:
         self.session.add(account)
         await self.session.commit()
 
-    async def update_confirm_before_send(self, account: XYAccount, confirm_before_send: bool) -> None:
-        """更新发货成功再发卡券开关（与send_before_confirm互斥）"""
-        values = {"confirm_before_send": confirm_before_send}
-        if confirm_before_send:
-            values.update(send_before_confirm=False, only_send_card=False)
-        stmt = update(XYAccount).where(XYAccount.id == account.id).values(**values)
-        await self.session.execute(stmt)
-        await self.session.commit()
-        account.confirm_before_send = confirm_before_send
-        if confirm_before_send:
-            account.send_before_confirm = False
-            account.only_send_card = False
-
-    async def update_send_before_confirm(self, account: XYAccount, send_before_confirm: bool) -> None:
-        """更新卡券发送成功再确认发货开关（与confirm_before_send互斥）"""
-        values = {"send_before_confirm": send_before_confirm}
-        if send_before_confirm:
-            values.update(confirm_before_send=False, only_send_card=False)
-        stmt = update(XYAccount).where(XYAccount.id == account.id).values(**values)
-        await self.session.execute(stmt)
-        await self.session.commit()
-        account.send_before_confirm = send_before_confirm
-        if send_before_confirm:
-            account.confirm_before_send = False
-            account.only_send_card = False
-
-    async def update_only_send_card(self, account: XYAccount, only_send_card: bool) -> None:
-        """更新只发卡券开关。开启后关闭自动确认及其它确认顺序设置。"""
-        values = {"only_send_card": only_send_card}
-        if only_send_card:
-            values.update(
-                auto_confirm=False,
-                confirm_before_send=False,
-                send_before_confirm=False,
-            )
-        stmt = update(XYAccount).where(XYAccount.id == account.id).values(**values)
-        await self.session.execute(stmt)
-        await self.session.commit()
-        account.only_send_card = only_send_card
-        if only_send_card:
-            account.auto_confirm = False
-            account.confirm_before_send = False
-            account.send_before_confirm = False
-
     async def update_auto_red_flower(self, account: XYAccount, auto_red_flower: bool) -> None:
         """更新自动求小红花开关
         
@@ -692,296 +619,3 @@ class AccountService:
         await self.session.commit()
         # 同步内存对象属性（expire_on_commit=False 下对象属性不会自动刷新）
         account.ai_reply_block_ordered_users = ai_reply_block_ordered_users
-
-    async def update_delivery_disabled(
-        self,
-        account: XYAccount,
-        delivery_disabled: bool,
-        delivery_disabled_reason: str | None,
-        auto_close_order: bool = False,
-        delivery_only_card_after_close: bool = False,
-        excluded_item_ids: list[str] | None = None,
-    ) -> None:
-        """更新禁止发货设置（开关 + 原因 + 主动关闭订单 + 关闭后只发卡券 + 排除商品列表）
-
-        使用显式 UPDATE SQL 写入，避免 ORM 脏状态追踪可能导致字段未落库。
-
-        联动规则（与前端 UI 一致）：
-          - 禁止发货关闭：reason / auto_close_order / delivery_only_card_after_close
-            全部强制 False；排除商品列表强制清空
-          - auto_close_order 关闭：delivery_only_card_after_close 强制 False
-            （"关闭订单后继续发货"以"先关闭订单"为前置）
-
-        Args:
-            account: 账号实例
-            delivery_disabled: 禁止发货开关
-            delivery_disabled_reason: 禁止发货原因（开关关闭时会被清空）
-            auto_close_order: 主动关闭订单开关
-            delivery_only_card_after_close: 关闭订单后继续发货（仅发卡券）
-            excluded_item_ids: 排除商品 item_id 列表（开关关闭时会被清空；列表内自动
-                去重、去除空白、保留输入顺序）
-        """
-        normalized_reason: str | None
-        # 排除列表归一化：去空白 + 去重 + 保持顺序；上限 500 个，避免 JSON 过大
-        normalized_excluded: list[str] = []
-        if excluded_item_ids:
-            seen: set[str] = set()
-            for raw in excluded_item_ids:
-                if raw is None:
-                    continue
-                item_id = str(raw).strip()
-                if not item_id or item_id in seen:
-                    continue
-                seen.add(item_id)
-                normalized_excluded.append(item_id)
-                if len(normalized_excluded) >= 500:
-                    break
-
-        if not delivery_disabled:
-            normalized_reason = None
-            normalized_auto_close = False
-            normalized_only_card = False
-            # 禁止发货关闭时，排除商品列表也强制清空，避免遗留无效配置
-            normalized_excluded = []
-        else:
-            reason = (delivery_disabled_reason or "").strip()
-            normalized_reason = reason or None
-            normalized_auto_close = bool(auto_close_order)
-            # 主动关闭订单关闭时，"关闭后只发卡券"必须强制关闭
-            normalized_only_card = bool(delivery_only_card_after_close) if normalized_auto_close else False
-
-        # JSON 字段写入：MySQL 接受 None 表示 NULL；空列表用 None 存以节省空间
-        normalized_excluded_for_db: list[str] | None = normalized_excluded if normalized_excluded else None
-
-        stmt = (
-            update(XYAccount)
-            .where(XYAccount.id == account.id)
-            .values(
-                delivery_disabled=delivery_disabled,
-                delivery_disabled_reason=normalized_reason,
-                auto_close_order=normalized_auto_close,
-                delivery_only_card_after_close=normalized_only_card,
-                delivery_disabled_excluded_items=normalized_excluded_for_db,
-            )
-        )
-        await self.session.execute(stmt)
-
-        # 同步写入新规则表（buyer_credit_zero 规则）
-        from common.models.xy_delivery_block_rule import XYDeliveryBlockRule
-        from sqlalchemy import and_
-
-        rule_stmt = select(XYDeliveryBlockRule).where(
-            and_(
-                XYDeliveryBlockRule.account_id == account.account_id,
-                XYDeliveryBlockRule.rule_code == "buyer_credit_zero",
-            )
-        )
-        result = await self.session.execute(rule_stmt)
-        existing_rule = result.scalars().first()
-
-        if existing_rule:
-            existing_rule.enabled = delivery_disabled
-            existing_rule.block_reason = normalized_reason
-            existing_rule.auto_close_order = normalized_auto_close
-            existing_rule.only_card_after_close = normalized_only_card
-            existing_rule.excluded_item_ids = normalized_excluded_for_db
-        else:
-            new_rule = XYDeliveryBlockRule(
-                account_id=account.account_id,
-                rule_code="buyer_credit_zero",
-                enabled=delivery_disabled,
-                priority=10,
-                block_reason=normalized_reason,
-                auto_close_order=normalized_auto_close,
-                only_card_after_close=normalized_only_card,
-                excluded_item_ids=normalized_excluded_for_db,
-                config={"threshold": 0},
-            )
-            self.session.add(new_rule)
-
-        await self.session.commit()
-        # 同步内存对象属性
-        account.delivery_disabled = delivery_disabled
-        account.delivery_disabled_reason = normalized_reason
-        account.auto_close_order = normalized_auto_close
-        account.delivery_only_card_after_close = normalized_only_card
-        account.delivery_disabled_excluded_items = normalized_excluded_for_db
-
-    async def get_delivery_block_rules(self, account_id: str) -> list[dict]:
-        """获取账号的禁止发货规则列表
-
-        返回该账号所有规则配置（包括未启用的），按 priority 排序。
-        如果账号在 xy_delivery_block_rules 表中没有记录，返回所有可用规则的默认配置。
-
-        Args:
-            account_id: 账号标识（xy_accounts.account_id）
-
-        Returns:
-            规则配置列表
-        """
-        from common.models.xy_delivery_block_rule import XYDeliveryBlockRule
-        from common.services.delivery_block_rule_meta import get_all_rule_metadata
-
-        # 查询已有规则
-        stmt = (
-            select(XYDeliveryBlockRule)
-            .where(XYDeliveryBlockRule.account_id == account_id)
-            .order_by(XYDeliveryBlockRule.priority.asc())
-        )
-        result = await self.session.execute(stmt)
-        existing_rules = result.scalars().all()
-
-        # 构建已有规则的 code 集合
-        existing_codes = {r.rule_code for r in existing_rules}
-
-        # 获取所有可用规则元信息
-        all_metadata = get_all_rule_metadata()
-
-        # 合并：已有规则 + 未配置的规则（用默认值填充）
-        rule_list = []
-        for rule in existing_rules:
-            # 归一化 excluded_item_ids
-            excluded = []
-            if rule.excluded_item_ids:
-                raw = rule.excluded_item_ids
-                if isinstance(raw, str):
-                    try:
-                        import json
-                        raw = json.loads(raw)
-                    except Exception:
-                        raw = []
-                if isinstance(raw, list):
-                    excluded = [str(x).strip() for x in raw if x is not None and str(x).strip()]
-
-            rule_list.append({
-                "rule_code": rule.rule_code,
-                "rule_name": next(
-                    (m["rule_name"] for m in all_metadata if m["rule_code"] == rule.rule_code),
-                    rule.rule_code,
-                ),
-                "rule_description": next(
-                    (m["rule_description"] for m in all_metadata if m["rule_code"] == rule.rule_code),
-                    "",
-                ),
-                "enabled": rule.enabled,
-                "priority": rule.priority,
-                "block_reason": rule.block_reason or "",
-                "auto_close_order": bool(rule.auto_close_order),
-                "only_card_after_close": bool(rule.only_card_after_close),
-                "excluded_item_ids": excluded,
-                "config": rule.config or {},
-                "default_config": next(
-                    (m["default_config"] for m in all_metadata if m["rule_code"] == rule.rule_code),
-                    {},
-                ),
-            })
-
-        # 补充未配置的规则（默认关闭）
-        for meta in all_metadata:
-            if meta["rule_code"] not in existing_codes:
-                rule_list.append({
-                    "rule_code": meta["rule_code"],
-                    "rule_name": meta["rule_name"],
-                    "rule_description": meta["rule_description"],
-                    "enabled": False,
-                    "priority": meta["default_priority"],
-                    "block_reason": "",
-                    "auto_close_order": False,
-                    "only_card_after_close": False,
-                    "excluded_item_ids": [],
-                    "config": meta["default_config"],
-                    "default_config": meta["default_config"],
-                })
-
-        # 按 priority 排序
-        rule_list.sort(key=lambda x: x["priority"])
-        return rule_list
-
-    async def update_delivery_block_rules(
-        self,
-        account_id: str,
-        rules: list,
-    ) -> None:
-        """批量更新账号的禁止发货规则配置
-
-        使用 UPSERT 逻辑：存在则更新，不存在则插入。
-
-        Args:
-            account_id: 账号标识（xy_accounts.account_id）
-            rules: 规则配置列表（DeliveryBlockRuleItem 实例列表）
-        """
-        from common.models.xy_delivery_block_rule import XYDeliveryBlockRule
-        from sqlalchemy import and_
-
-        for rule_item in rules:
-            rule_code = rule_item.rule_code
-            enabled = rule_item.enabled
-            priority = rule_item.priority
-            block_reason = (rule_item.block_reason or "").strip() or None
-            auto_close = rule_item.auto_close_order
-            only_card = rule_item.only_card_after_close if auto_close else False
-
-            # 归一化排除商品列表
-            excluded_list: list[str] = []
-            if rule_item.excluded_item_ids:
-                seen: set[str] = set()
-                for raw in rule_item.excluded_item_ids:
-                    if raw is None:
-                        continue
-                    item_id = str(raw).strip()
-                    if not item_id or item_id in seen:
-                        continue
-                    seen.add(item_id)
-                    excluded_list.append(item_id)
-                    if len(excluded_list) >= 500:
-                        break
-            excluded_for_db = excluded_list if excluded_list else None
-
-            # 规则参数
-            config = rule_item.config if rule_item.config else None
-
-            # 查询是否已存在
-            stmt = select(XYDeliveryBlockRule).where(
-                and_(
-                    XYDeliveryBlockRule.account_id == account_id,
-                    XYDeliveryBlockRule.rule_code == rule_code,
-                )
-            )
-            result = await self.session.execute(stmt)
-            existing = result.scalars().first()
-
-            if existing:
-                # 更新
-                existing.enabled = enabled
-                existing.priority = priority
-                existing.block_reason = block_reason
-                existing.auto_close_order = auto_close
-                existing.only_card_after_close = only_card
-                existing.excluded_item_ids = excluded_for_db
-                existing.config = config
-            else:
-                # 插入
-                new_rule = XYDeliveryBlockRule(
-                    account_id=account_id,
-                    rule_code=rule_code,
-                    enabled=enabled,
-                    priority=priority,
-                    block_reason=block_reason,
-                    auto_close_order=auto_close,
-                    only_card_after_close=only_card,
-                    excluded_item_ids=excluded_for_db,
-                    config=config,
-                )
-                self.session.add(new_rule)
-
-        # 同步更新旧字段 delivery_disabled（用于前端图标显示兼容）
-        # 只要有任何一条规则 enabled=True，旧字段就标记为 True
-        has_any_enabled = any(r.enabled for r in rules)
-        sync_stmt = (
-            update(XYAccount)
-            .where(XYAccount.account_id == account_id)
-            .values(delivery_disabled=has_any_enabled)
-        )
-        await self.session.execute(sync_stmt)
-
-        await self.session.commit()

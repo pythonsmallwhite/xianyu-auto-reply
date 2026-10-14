@@ -12,7 +12,6 @@ const tableOptions = [
   { value: 'default_replies', label: '默认回复表' },
   { value: 'keywords', label: '关键词表' },
   { value: 'cookies', label: '账号表' },
-  { value: 'cards', label: '卡券表' },
   { value: 'orders', label: '订单表' },
   { value: 'item_info', label: '商品信息表' },
   { value: 'notification_channels', label: '通知渠道表' },

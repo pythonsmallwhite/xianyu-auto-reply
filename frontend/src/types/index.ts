@@ -48,22 +48,10 @@ export interface Account {
   online?: boolean  // 在线状态：是否已建立真实 WebSocket 连接（口径同仪表盘“在线账号”）
   use_ai_reply: boolean
   use_default_reply: boolean
-  auto_confirm: boolean
-  scheduled_redelivery?: boolean
   scheduled_rate?: boolean
   auto_polish?: boolean
-  confirm_before_send?: boolean
-  send_before_confirm?: boolean
-  only_send_card?: boolean
   auto_red_flower?: boolean
   ai_reply_block_ordered_users?: boolean
-  agree_deliver_enabled?: boolean
-  delivery_disabled?: boolean
-  delivery_disabled_reason?: string
-  auto_close_order?: boolean
-  delivery_only_card_after_close?: boolean
-  // 禁止发货排除商品列表（命中此列表的 item_id 跳过禁止发货拦截，按正常流程发货）
-  delivery_disabled_excluded_item_ids?: string[]
   note?: string
   remark?: string
   remaining_publish_capacity?: number | null
@@ -145,10 +133,8 @@ export interface Item {
   is_polished?: boolean            // 是否擦亮
   is_multi_spec?: number | boolean
   multi_delivery?: boolean
-  multi_quantity_delivery?: number | boolean
   default_reply_enabled?: boolean  // 默认回复是否启用
   has_default_reply?: boolean      // 是否配置了默认回复
-  has_card?: boolean               // 是否配置了发货卡券
   ai_prompt?: string               // AI提示词
   has_ai_prompt?: boolean          // 是否配置了AI提示词
   created_at?: string
@@ -180,12 +166,9 @@ export interface Order {
   receiver_address?: string  // 收货地址
   // 发货信息
   delivery_method?: 'manual' | 'auto' | 'scheduled'  // 发货方式：manual-手动发货, auto-自动发货, scheduled-定时发货
-  delivery_content?: string  // 发货内容（卡券内容）
+  delivery_content?: string  // 发货内容（历史数据）
   delivery_fail_reason?: string  // 发货失败原因
-  card_only_delivered?: boolean  // 只发卡券流程已处理，禁止重复耗卡
-  delivery_send_status?: 'success' | 'failed' | 'unknown' | 'timeout' | null  // 关联消息日志：发送状态
-  delivery_send_fail_reason?: string | null  // 关联消息日志：发送失败原因
-  is_agent_order?: boolean  // 是否是代销订单
+  card_only_delivered?: boolean  // 历史字段：旧版只发卡券流程标记
   source?: string  // 数据来源
   placed_at?: string  // 订单时间（下单时间）
   created_at?: string
@@ -290,18 +273,6 @@ export interface SystemSettings {
   smtp_from?: string
   smtp_use_tls?: boolean
   smtp_use_ssl?: boolean
-  // 模块设置
-  'distribution.fee_type'?: string  // fixed-固定金额, percent-百分比
-  'distribution.fee_rate'?: string
-  // 支付宝配置
-  'alipay.app_id'?: string
-  'alipay.private_key'?: string
-  'alipay.alipay_public_key'?: string
-  'alipay.gateway_url'?: string
-  'alipay.notify_url'?: string
-  // 提现配置
-  'withdraw.notify_email'?: string
-  'withdraw.min_amount'?: string
   // 日志配置
   'log.retention_days'?: string
   // 账号安全设置
@@ -318,9 +289,6 @@ export interface SystemSettings {
   // 代理设置
   'proxy.api_url'?: string
   'proxy.enabled'?: boolean
-  // 用户到期/续期设置
-  'user.renew_month_price'?: string
-  'user.register_default_days'?: string
   [key: string]: unknown
 }
 

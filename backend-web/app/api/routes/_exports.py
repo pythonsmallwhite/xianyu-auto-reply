@@ -20,16 +20,12 @@ from . import (
     auto_rate,
     blacklist,
     captcha,
-    cards,
-    card_dock,
     data_analysis,
-    distribution,
     chat_new,
     chat_new_ws,
     chat_new_image,
     chat_quick_phrase,
     chat_customer_order,
-    payment,
     popup_announcements,
     confirm_receipt_messages,
     api_cookie_renew_logs,
@@ -66,9 +62,6 @@ from . import (
     external_orders,
     external_publish,
     proxy,
-    refund_cancel,
-    agree_deliver,
-    agree_pickup,
     qr_login,
     risk_control_logs,
     account_login_logs,
@@ -127,10 +120,6 @@ api_router.include_router(external_message_logs.router, tags=["公开消息日�
 api_router.include_router(external_orders.router, tags=["公开订单查询"])  # 已定义prefix="/external/orders"
 api_router.include_router(external_publish.router, tags=["公开商品发布"])  # 已定义prefix="/external/publish"
 api_router.include_router(keywords.router, prefix="/keywords-with-item-id", tags=["关键词管理"])
-api_router.include_router(cards.router, prefix="/cards", tags=["卡券管理"])
-api_router.include_router(distribution.router, prefix="/distribution", tags=["分销管理"])
-api_router.include_router(card_dock.router, tags=["分销卡券"])  # 已定义prefix="/card-dock"
-api_router.include_router(payment.router, tags=["支付管理"])  # 已定义prefix="/payment"
 
 # AI回复
 api_router.include_router(ai.router, prefix="/ai-reply-settings", tags=["AI回复"])
@@ -168,10 +157,6 @@ api_router.include_router(token_renewal_logs.router, prefix="/admin", tags=["Tok
 
 # 代理和上传
 api_router.include_router(proxy.router, prefix="/proxy", tags=["代理配置"])
-api_router.include_router(refund_cancel.router, prefix="/refund-cancel", tags=["退款订单注销配置"])
-api_router.include_router(agree_deliver.router, prefix="/agree-deliver", tags=["同意后发货配置"])
-# 同意后发货提货页（公开接口，无需登录）
-api_router.include_router(agree_pickup.router, prefix="/agree-pickup", tags=["同意后发货提货页"])
 api_router.include_router(upload.router, prefix="/upload", tags=["文件上传"])
 
 # Cookie和验证

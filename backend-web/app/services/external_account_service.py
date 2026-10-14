@@ -2,7 +2,7 @@
 公开账号访问服务。
 
 功能：
-1. 根据个人设置中的分销秘钥定位所属用户。
+1. 根据个人设置中的外部接口秘钥定位所属用户。
 2. 返回该用户账号管理中全部账号的账号 ID、备注和启用状态（含禁用账号）。
 3. 校验公开接口指定的账号是否属于该秘钥用户，不限制账号启用状态。
 """
@@ -27,7 +27,7 @@ class ExternalAccountAccessError(RuntimeError):
 
 
 class ExternalAccountService:
-    """使用分销秘钥查询用户名下的闲鱼账号。"""
+    """使用外部接口秘钥查询用户名下的闲鱼账号。"""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -48,10 +48,10 @@ class ExternalAccountService:
 
     async def _get_owner_id_by_secret(self, secret_key: str) -> int | None:
         """
-        根据分销秘钥查询所属用户 ID。
+        根据外部接口秘钥查询所属用户 ID。
 
         Args:
-            secret_key: 个人设置-分销管理中的分销秘钥。
+            secret_key: 个人设置-分销管理中的外部接口秘钥。
         Returns:
             秘钥不存在时返回 None，否则返回用户 ID。
         """
@@ -65,7 +65,7 @@ class ExternalAccountService:
         return user.id
 
     async def get_user_by_secret(self, secret_key: str) -> User | None:
-        """根据分销秘钥获取用户对象，未找到时返回 ``None``。"""
+        """根据外部接口秘钥获取用户对象，未找到时返回 ``None``。"""
         return (
             await self.session.execute(
                 select(User).where(User.secret_key == secret_key.strip()).limit(1)
@@ -74,10 +74,10 @@ class ExternalAccountService:
 
     async def list_accounts_by_secret(self, secret_key: str) -> list[dict[str, Any]] | None:
         """
-        根据分销秘钥查询所属用户的全部账号（含禁用账号）。
+        根据外部接口秘钥查询所属用户的全部账号（含禁用账号）。
 
         Args:
-            secret_key: 个人设置-分销管理中的分销秘钥。
+            secret_key: 个人设置-分销管理中的外部接口秘钥。
         Returns:
             秘钥不存在时返回 None；匹配时返回账号列表，每项含账号 ID、备注、
             enabled 启用标识、status 原始状态和 disable_reason 禁用原因。
@@ -113,13 +113,13 @@ class ExternalAccountService:
         account_id: str,
     ) -> XYAccount:
         """
-        获取分销秘钥所属用户的指定账号，不校验启用状态。
+        获取外部接口秘钥所属用户的指定账号，不校验启用状态。
 
         公开接口只做归属校验：禁用账号也允许调用分类和发布接口，
         Cookie 失效等问题由平台调用结果如实返回给调用方。
 
         Args:
-            secret_key: 个人设置-分销管理中的分销秘钥。
+            secret_key: 个人设置-分销管理中的外部接口秘钥。
             account_id: 上一个公开账号列表接口返回的闲鱼账号 ID。
         Returns:
             已确认归属该秘钥用户的账号记录。

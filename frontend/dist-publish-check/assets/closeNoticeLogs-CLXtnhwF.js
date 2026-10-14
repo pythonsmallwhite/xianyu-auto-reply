@@ -1,0 +1,1 @@
+import{c}from"./batchLogFactory-DMC3UhUK.js";const e=c({batches:"close-notice-batches",clearLogs:"close-notice-logs/clear"}),o=e.getBatches,s=e.getBatchDetail,a=e.clearLogs;export{s as a,a as c,o as g};

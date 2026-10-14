@@ -61,9 +61,9 @@ class User(TimestampMixin, Base):
     login_fail_count: Mapped[int] = mapped_column(default=0, server_default="0", comment="登录失败次数")
     login_locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), comment="登录锁定截止时间")
     dock_code: Mapped[str | None] = mapped_column(String(32), unique=True, nullable=True, comment='对接码，用于分销商识别')
-    # 分销秘钥：32位随机字符，全局唯一，支持更换；用于分销接口的身份校验
-    secret_key: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, comment='分销秘钥，32位随机字符，全局唯一')
-    # 账号到期日（精确到时分秒）：NULL 表示永不过期；到期后 WebSocket 不再连接并自动禁用账号
+    # 外部接口秘钥：32位随机字符，全局唯一，支持更换；用于外部接口的身份校验
+    secret_key: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, comment='外部接口秘钥，32位随机字符，全局唯一')
+    # 历史字段：账号到期日（续期功能已移除，仅保留列以兼容旧库）
     expire_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment='账号到期日（精确到秒，NULL=永不过期）')
 
     # 关系定义 - 无外键约束，通过代码控制数据一致性
@@ -72,13 +72,6 @@ class User(TimestampMixin, Base):
         primaryjoin="User.id == XYAccount.owner_id",
         foreign_keys="XYAccount.owner_id",
         back_populates="owner",
-        viewonly=True,
-    )
-    cards: Mapped[list["Card"]] = relationship(
-        "Card",
-        primaryjoin="User.id == Card.user_id",
-        foreign_keys="Card.user_id",
-        back_populates="user",
         viewonly=True,
     )
 

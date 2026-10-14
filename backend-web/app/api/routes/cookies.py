@@ -5,7 +5,7 @@
 1. 账号列表查询
 2. 账号创建、更新、删除
 3. 账号状态管理（启用/禁用）
-4. 账号配置更新（备注、自动确认、暂停时长）
+4. 账号配置更新（备注、暂停时长）
 5. 自动启动/停止WebSocket任务
 """
 from __future__ import annotations
@@ -18,16 +18,13 @@ from common.models.user import User
 from common.models.xy_account import XYAccount
 from common.utils.time_utils import safe_isoformat
 from common.schemas.account import (
-    AccountAutoConfirmUpdate,
     AccountAutoPolishUpdate,
     AccountBatchIdsUpdate,
     AccountBatchStatusUpdate,
     AccountAutoRedFlowerUpdate,
     AccountAiReplyBlockOrderedUsersUpdate,
-    AccountConfirmBeforeSendUpdate,
     AccountCookieUpdate,
     AccountCreate,
-    AccountDeliveryDisabledUpdate,
     AccountDetail,
     AccountOption,
     AccountLoginInfoUpdate,
@@ -37,12 +34,8 @@ from common.schemas.account import (
     AccountPublishCapacityResolution,
     AccountRemarkUpdate,
     AccountReplyDelayUpdate,
-    AccountScheduledRedeliveryUpdate,
     AccountScheduledRateUpdate,
-    AccountSendBeforeConfirmUpdate,
-    AccountOnlySendCardUpdate,
     AccountStatusUpdate,
-    DeliveryBlockRulesUpdate,
 )
 from common.schemas.common import ApiResponse
 from common.services.ai_provider_service import read_ai_enabled
@@ -78,35 +71,6 @@ def _status_to_enabled(status: str | None) -> bool:
         return True
     normalized = status.strip().lower()
     return normalized not in {"inactive", "disabled", "suspended", "deleted"}
-
-
-def _normalize_delivery_excluded_items(raw: object) -> list[str]:
-    """归一化禁止发货排除商品列表，兼容 JSON 字段返回的 None / list / 字符串
-
-    - None / 空 -> []
-    - list[Any] -> 逐项 str().strip()，过滤空白
-    - str -> 尝试按 JSON 解析（部分驱动可能返回字符串）
-    其余非法类型一律返回 []。
-    """
-    if not raw:
-        return []
-    candidate = raw
-    if isinstance(candidate, str):
-        try:
-            import json as _json
-            candidate = _json.loads(candidate)
-        except Exception:
-            return []
-    if not isinstance(candidate, list):
-        return []
-    result: list[str] = []
-    for item in candidate:
-        if item is None:
-            continue
-        text_item = str(item).strip()
-        if text_item:
-            result.append(text_item)
-    return result
 
 
 def _normalize_batch_account_ids(account_ids: list[str]) -> list[str]:
@@ -203,22 +167,10 @@ async def list_cookie_details(
                 id=account.account_id,
                 value=account.cookie or "",
                 enabled=_status_to_enabled(account.status),
-                auto_confirm=bool(account.auto_confirm),
-                scheduled_redelivery=bool(account.scheduled_redelivery),
                 scheduled_rate=bool(account.scheduled_rate),
                 auto_polish=bool(account.auto_polish),
-                confirm_before_send=bool(account.confirm_before_send),
-                send_before_confirm=bool(account.send_before_confirm),
-                only_send_card=bool(account.only_send_card),
                 auto_red_flower=bool(account.auto_red_flower),
                 ai_reply_block_ordered_users=bool(account.ai_reply_block_ordered_users),
-                delivery_disabled=bool(account.delivery_disabled),
-                delivery_disabled_reason=account.delivery_disabled_reason or "",
-                auto_close_order=bool(account.auto_close_order),
-                delivery_only_card_after_close=bool(account.delivery_only_card_after_close),
-                delivery_disabled_excluded_item_ids=_normalize_delivery_excluded_items(
-                    account.delivery_disabled_excluded_items
-                ),
                 remark=account.remark or "",
                 pause_duration=account.pause_duration if account.pause_duration is not None else 10,
                 message_expire_time=account.message_expire_time if account.message_expire_time is not None else 3600,
@@ -241,10 +193,8 @@ async def list_cookie_details_paginated(
     page_size: int = Query(default=20, ge=1, le=100, description="每页数量"),
     status: str | None = Query(default=None, description="状态筛选：active/inactive"),
     ai_reply: bool | None = Query(default=None, description="AI回复开关筛选"),
-    scheduled_redelivery: bool | None = Query(default=None, description="定时补发货筛选"),
     scheduled_rate: bool | None = Query(default=None, description="定时补评价筛选"),
     auto_polish: bool | None = Query(default=None, description="商品擦亮筛选"),
-    auto_confirm: bool | None = Query(default=None, description="自动确认收货筛选"),
     has_password: bool | None = Query(default=None, description="是否配置密码筛选"),
     online: bool | None = Query(default=None, description="在线状态筛选：true=在线/false=离线"),
     disable_reason: str | None = Query(default=None, max_length=255, description="禁用原因模糊搜索关键词"),
@@ -261,10 +211,8 @@ async def list_cookie_details_paginated(
     筛选条件：
     - status: 状态（active=启用, inactive=禁用）
     - ai_reply: AI回复开关（true/false）
-    - scheduled_redelivery: 定时补发货（true/false）
     - scheduled_rate: 定时补评价（true/false）
     - auto_polish: 商品擦亮（true/false）
-    - auto_confirm: 自动确认收货（true/false）
     - has_password: 是否配置密码（true/false）
     - disable_reason: 禁用原因关键词（LIKE 模糊搜索）
     - account_id: 账号ID关键词（LIKE 模糊搜索）
@@ -285,10 +233,8 @@ async def list_cookie_details_paginated(
         page_size=page_size,
         status=status,
         ai_reply=ai_reply,
-        scheduled_redelivery=scheduled_redelivery,
         scheduled_rate=scheduled_rate,
         auto_polish=auto_polish,
-        auto_confirm=auto_confirm,
         has_password=has_password,
         disable_reason=disable_reason,
         account_id=account_id,
@@ -350,23 +296,10 @@ async def list_cookie_details_paginated(
             "value": account.cookie or "",
             "enabled": _status_to_enabled(account.status),
             "online": account.account_id in online_ids,
-            "auto_confirm": bool(account.auto_confirm),
-            "scheduled_redelivery": bool(account.scheduled_redelivery),
             "scheduled_rate": bool(account.scheduled_rate),
             "auto_polish": bool(account.auto_polish),
-            "confirm_before_send": bool(account.confirm_before_send),
-            "send_before_confirm": bool(account.send_before_confirm),
-            "only_send_card": bool(account.only_send_card),
             "auto_red_flower": bool(account.auto_red_flower),
             "ai_reply_block_ordered_users": bool(account.ai_reply_block_ordered_users),
-            "agree_deliver_enabled": bool(account.agree_deliver_enabled),
-            "delivery_disabled": bool(account.delivery_disabled),
-            "delivery_disabled_reason": account.delivery_disabled_reason or "",
-            "auto_close_order": bool(account.auto_close_order),
-            "delivery_only_card_after_close": bool(account.delivery_only_card_after_close),
-            "delivery_disabled_excluded_item_ids": _normalize_delivery_excluded_items(
-                account.delivery_disabled_excluded_items
-            ),
             "remark": account.remark or "",
             "pause_duration": account.pause_duration if account.pause_duration is not None else 10,
             "message_expire_time": account.message_expire_time if account.message_expire_time is not None else 3600,
@@ -459,16 +392,6 @@ async def _update_account_status_and_task(
         return False, task_message or ("账号任务启动失败" if enabled else "账号任务停止失败")
 
     return True, None
-
-
-@router.get("/delivery-block-rules/available", response_model=ApiResponse)
-async def get_available_delivery_block_rules(
-    current_user: User = Depends(deps.get_current_active_user),
-) -> ApiResponse:
-    """获取所有可用的禁止发货规则类型（前端展示用）"""
-    from common.services.delivery_block_rule_meta import get_all_rule_metadata
-    metadata = get_all_rule_metadata()
-    return ApiResponse(success=True, message="获取成功", data=metadata)
 
 
 @router.post("", response_model=ApiResponse)
@@ -748,18 +671,6 @@ async def resolve_account_publish_capacity_reservation(
     return ApiResponse(success=True, message="发布结果已对账", data=result)
 
 
-@router.put("/{account_id}/auto-confirm", response_model=ApiResponse)
-async def update_account_auto_confirm(
-    account_id: str,
-    payload: AccountAutoConfirmUpdate,
-    current_user: User = Depends(deps.get_current_active_user),
-    account_service: AccountService = Depends(deps.get_account_service),
-) -> ApiResponse:
-    account = await _get_account_or_404(current_user, account_id, account_service)
-    await account_service.update_auto_confirm(account, payload.auto_confirm)
-    return ApiResponse(success=True, message="自动确认设置已更新")
-
-
 @router.put("/{account_id}/pause-duration", response_model=ApiResponse)
 async def update_account_pause_duration(
     account_id: str,
@@ -816,19 +727,6 @@ async def update_account_login_info(
     return ApiResponse(success=True, message="登录信息已更新")
 
 
-@router.put("/{account_id}/scheduled-redelivery", response_model=ApiResponse)
-async def update_account_scheduled_redelivery(
-    account_id: str,
-    payload: AccountScheduledRedeliveryUpdate,
-    current_user: User = Depends(deps.get_current_active_user),
-    account_service: AccountService = Depends(deps.get_account_service),
-) -> ApiResponse:
-    """更新定时补发货开关"""
-    account = await _get_account_or_404(current_user, account_id, account_service)
-    await account_service.update_scheduled_redelivery(account, payload.scheduled_redelivery)
-    return ApiResponse(success=True, message="定时补发货设置已更新")
-
-
 @router.put("/{account_id}/scheduled-rate", response_model=ApiResponse)
 async def update_account_scheduled_rate(
     account_id: str,
@@ -855,45 +753,6 @@ async def update_account_auto_polish(
     return ApiResponse(success=True, message="商品自动擦亮设置已更新")
 
 
-@router.put("/{account_id}/confirm-before-send", response_model=ApiResponse)
-async def update_account_confirm_before_send(
-    account_id: str,
-    payload: AccountConfirmBeforeSendUpdate,
-    current_user: User = Depends(deps.get_current_active_user),
-    account_service: AccountService = Depends(deps.get_account_service),
-) -> ApiResponse:
-    """更新发货成功再发卡券开关"""
-    account = await _get_account_or_404(current_user, account_id, account_service)
-    await account_service.update_confirm_before_send(account, payload.confirm_before_send)
-    return ApiResponse(success=True, message="发货成功再发卡券设置已更新")
-
-
-@router.put("/{account_id}/send-before-confirm", response_model=ApiResponse)
-async def update_account_send_before_confirm(
-    account_id: str,
-    payload: AccountSendBeforeConfirmUpdate,
-    current_user: User = Depends(deps.get_current_active_user),
-    account_service: AccountService = Depends(deps.get_account_service),
-) -> ApiResponse:
-    """更新卡券发送成功再确认发货开关"""
-    account = await _get_account_or_404(current_user, account_id, account_service)
-    await account_service.update_send_before_confirm(account, payload.send_before_confirm)
-    return ApiResponse(success=True, message="卡券发送成功再确认发货设置已更新")
-
-
-@router.put("/{account_id}/only-send-card", response_model=ApiResponse)
-async def update_account_only_send_card(
-    account_id: str,
-    payload: AccountOnlySendCardUpdate,
-    current_user: User = Depends(deps.get_current_active_user),
-    account_service: AccountService = Depends(deps.get_account_service),
-) -> ApiResponse:
-    """更新只发卡券、不确认发货开关"""
-    account = await _get_account_or_404(current_user, account_id, account_service)
-    await account_service.update_only_send_card(account, payload.only_send_card)
-    return ApiResponse(success=True, message="只发卡券不确认发货设置已更新")
-
-
 @router.put("/{account_id}/auto-red-flower", response_model=ApiResponse)
 async def update_account_auto_red_flower(
     account_id: str,
@@ -918,54 +777,6 @@ async def update_account_ai_reply_block_ordered_users(
     account = await _get_account_or_404(current_user, account_id, account_service)
     await account_service.update_ai_reply_block_ordered_users(account, payload.ai_reply_block_ordered_users)
     return ApiResponse(success=True, message="已下单用户禁止AI回复设置已更新")
-
-
-@router.put("/{account_id}/delivery-disabled", response_model=ApiResponse)
-async def update_account_delivery_disabled(
-    account_id: str,
-    payload: AccountDeliveryDisabledUpdate,
-    current_user: User = Depends(deps.get_current_active_user),
-    account_service: AccountService = Depends(deps.get_account_service),
-) -> ApiResponse:
-    """更新禁止发货设置（旧接口，保留向后兼容）
-
-    内部会将旧格式转换为规则引擎格式写入 xy_delivery_block_rules 表。
-    """
-    account = await _get_account_or_404(current_user, account_id, account_service)
-    await account_service.update_delivery_disabled(
-        account,
-        delivery_disabled=payload.delivery_disabled,
-        delivery_disabled_reason=payload.delivery_disabled_reason,
-        auto_close_order=payload.auto_close_order,
-        delivery_only_card_after_close=payload.delivery_only_card_after_close,
-        excluded_item_ids=payload.excluded_item_ids or [],
-    )
-    return ApiResponse(success=True, message="禁止发货设置已更新")
-
-
-@router.get("/{account_id}/delivery-block-rules", response_model=ApiResponse)
-async def get_delivery_block_rules(
-    account_id: str,
-    current_user: User = Depends(deps.get_current_active_user),
-    account_service: AccountService = Depends(deps.get_account_service),
-) -> ApiResponse:
-    """获取账号的禁止发货规则列表"""
-    account = await _get_account_or_404(current_user, account_id, account_service)
-    rules = await account_service.get_delivery_block_rules(account.account_id)
-    return ApiResponse(success=True, message="获取成功", data=rules)
-
-
-@router.put("/{account_id}/delivery-block-rules", response_model=ApiResponse)
-async def update_delivery_block_rules(
-    account_id: str,
-    payload: DeliveryBlockRulesUpdate,
-    current_user: User = Depends(deps.get_current_active_user),
-    account_service: AccountService = Depends(deps.get_account_service),
-) -> ApiResponse:
-    """批量更新账号的禁止发货规则配置"""
-    account = await _get_account_or_404(current_user, account_id, account_service)
-    await account_service.update_delivery_block_rules(account.account_id, payload.rules)
-    return ApiResponse(success=True, message="禁止发货规则已更新")
 
 
 @router.delete("/{account_id}", response_model=ApiResponse)

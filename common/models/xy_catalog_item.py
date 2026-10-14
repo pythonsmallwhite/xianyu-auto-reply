@@ -53,12 +53,3 @@ class XYCatalogItem(Base):
         viewonly=True,
     )
 
-    # 多对多关联关系 - 通过 xy_card_item_relations 表关联卡券
-    card_relations = relationship(
-        "CardItemRelation",
-        primaryjoin="XYCatalogItem.item_id == CardItemRelation.item_id",
-        foreign_keys="[CardItemRelation.item_id]",
-        viewonly=True,
-        lazy="select",
-    )
-

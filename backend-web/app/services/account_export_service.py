@@ -19,8 +19,6 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.xy_account import XYAccount
-from common.models.card import Card
-from common.models.card_item_relation import CardItemRelation
 from common.models.xy_keyword_rule import XYKeywordRule
 from common.models.default_reply import DefaultReply
 from common.models.xy_catalog_item import XYCatalogItem
@@ -99,11 +97,6 @@ class AccountExportService:
         user_id_list = list({acc.owner_id for acc in accounts})
 
         # 2. 查询关联数据
-        cards = await self._get_cards(user_id_list) if user_id_list else []
-        card_ids = [c.id for c in cards]
-        # 构建 card_id -> card_name 映射（卡券商品关联Sheet用名称代替主键）
-        self._card_id_to_name = {c.id: c.name for c in cards}
-        card_item_relations = await self._get_card_item_relations(card_ids) if card_ids else []
         keyword_rules = await self._get_keyword_rules(account_pk_list) if account_pk_list else []
         default_replies = await self._get_default_replies(account_id_list) if account_id_list else []
         message_filters = await self._get_message_filters(account_id_list) if account_id_list else []
@@ -123,8 +116,6 @@ class AccountExportService:
         self._write_account_switches(wb, accounts)
         self._write_ai_settings(wb, accounts)
         self._write_catalog_items(wb, catalog_items, pk_to_account_id)
-        self._write_cards(wb, cards)
-        self._write_card_item_relations(wb, card_item_relations)
         self._write_keyword_rules(wb, keyword_rules, pk_to_account_id)
         self._write_default_replies(wb, default_replies)
         self._write_message_filters(wb, message_filters)
@@ -164,16 +155,6 @@ class AccountExportService:
                     (XYAccount.login_password.is_(None)) | (XYAccount.login_password == "")
                 )
         stmt = stmt.order_by(XYAccount.id.asc())
-        result = await self.session.execute(stmt)
-        return list(result.scalars().all())
-
-    async def _get_cards(self, user_ids: list[int]) -> list[Card]:
-        stmt = select(Card).where(Card.user_id.in_(user_ids)).order_by(Card.id.asc())
-        result = await self.session.execute(stmt)
-        return list(result.scalars().all())
-
-    async def _get_card_item_relations(self, card_ids: list[int]) -> list[CardItemRelation]:
-        stmt = select(CardItemRelation).where(CardItemRelation.card_id.in_(card_ids))
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
@@ -235,20 +216,12 @@ class AccountExportService:
 
     def _write_account_switches(self, wb: Workbook, accounts: list[XYAccount]) -> None:
         headers = [
-            "账号ID", "自动确认收货", "定时补发货", "定时补评价", "商品擦亮",
-            "发货成功再发卡券", "卡券发送成功再确认发货", "只发卡券不确认发货",
-            "自动求小红花", "禁止发货", "禁止发货原因",
-            "主动关闭订单", "关闭后发卡券", "禁止发货排除商品",
+            "账号ID", "定时补评价", "商品擦亮", "自动求小红花",
         ]
         rows = []
         for acc in accounts:
             rows.append([
-                acc.account_id, acc.auto_confirm, acc.scheduled_redelivery,
-                acc.scheduled_rate, acc.auto_polish, acc.confirm_before_send,
-                acc.send_before_confirm, acc.only_send_card,
-                acc.auto_red_flower, acc.delivery_disabled, acc.delivery_disabled_reason,
-                acc.auto_close_order, acc.delivery_only_card_after_close,
-                acc.delivery_disabled_excluded_items,
+                acc.account_id, acc.scheduled_rate, acc.auto_polish, acc.auto_red_flower,
             ])
         _write_sheet(wb, "账号开关配置", headers, rows)
 
@@ -269,30 +242,6 @@ class AccountExportService:
                 item.item_id, item.title, item.price, item.ai_prompt,
             ])
         _write_sheet(wb, "商品目录", headers, rows)
-
-    def _write_cards(self, wb: Workbook, cards: list[Card]) -> None:
-        headers = [
-            "卡券名称", "类型", "启用", "延迟秒数",
-            "多规格", "规格名", "规格值",
-            "API配置", "文本内容", "数据内容", "图片URL", "多图片URL",
-        ]
-        rows = []
-        for card in cards:
-            rows.append([
-                card.name, card.type, card.enabled, card.delay_seconds,
-                card.is_multi_spec, card.spec_name, card.spec_value,
-                card.api_config, card.text_content, card.data_content,
-                card.image_url, card.image_urls,
-            ])
-        _write_sheet(wb, "卡券", headers, rows)
-
-    def _write_card_item_relations(self, wb: Workbook, relations: list[CardItemRelation]) -> None:
-        headers = ["卡券名称", "商品ID", "来源"]
-        rows = []
-        for rel in relations:
-            card_name = self._card_id_to_name.get(rel.card_id, "")
-            rows.append([card_name, rel.item_id, rel.source])
-        _write_sheet(wb, "卡券商品关联", headers, rows)
 
     def _write_keyword_rules(self, wb: Workbook, rules: list[XYKeywordRule], pk_map: dict) -> None:
         headers = ["账号ID", "关键词", "回复内容", "回复类型", "图片URL", "定位名称", "经度", "纬度", "位置标题", "位置副标题", "商品ID", "优先级", "启用"]

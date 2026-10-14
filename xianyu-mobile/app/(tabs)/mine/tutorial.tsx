@@ -45,7 +45,7 @@ export default function TutorialScreen() {
         <Card style={styles.section}>
           <Text style={[styles.heading, { color: c.text }]}>6. 商品管理</Text>
           <Text style={[styles.body, { color: c.textSecondary }]}>
-            在"商品"Tab 中查看商品监控、管理卡券和配置发货规则。
+            在"商品"Tab 中查看商品监控与商品信息。
           </Text>
         </Card>
       </View>

@@ -72,20 +72,6 @@ class BackendWebConfig(BaseConfig):
     # 启动时是否自动启动Goofish定时采集任务
     auto_start_crawl_jobs: bool = Field(default=True, alias="AUTO_START_CRAWL_JOBS")
 
-    # 卡券对接（分销卡券）上游服务基址：用于「分销卡券」页面通过上游卡券系统提货
-    # 默认指向生产环境上游服务，可通过环境变量 CARD_DOCK_BASE_URL 覆盖（禁止写死 localhost）
-    card_dock_base_url: str = Field(
-        default="http://backend.zhinianboke.com",
-        alias="CARD_DOCK_BASE_URL",
-    )
-
-    # 外部 API 密钥管理服务：用于个人设置「对接卡密秘钥」一键创建密钥
-    # 复用 CARD_DOCK_BASE_URL 作为基址，仅 key 通过环境变量单独配置（禁止写死）
-    external_api_key: str = Field(
-        default="",
-        alias="EXTERNAL_API_KEY",
-    )
-
     @computed_field(return_type=list[str])
     @property
     def cors_origins(self) -> List[str]:

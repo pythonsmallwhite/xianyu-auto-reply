@@ -37,7 +37,6 @@ export interface ItemFilterParams {
   keyword?: string | null            // 搜索关键字（商品ID/标题/详情）
   is_polished?: boolean | null      // 是否擦亮
   is_multi_spec?: boolean | null    // 多规格
-  multi_quantity_delivery?: boolean | null  // 多数量发货
   show_history?: boolean  // 显式显示历史或来源待确认商品
 }
 
@@ -73,9 +72,6 @@ export const getItemsPaginated = async (
     if (filters.is_multi_spec !== null && filters.is_multi_spec !== undefined) {
       params.append('is_multi_spec', String(filters.is_multi_spec))
     }
-    if (filters.multi_quantity_delivery !== null && filters.multi_quantity_delivery !== undefined) {
-      params.append('multi_quantity_delivery', String(filters.multi_quantity_delivery))
-    }
     if (filters.show_history) params.append('show_history', 'true')
   }
   
@@ -88,32 +84,6 @@ export const getItemsPaginated = async (
     total_pages: number
   }>(`${ITEM_PREFIX}/paginated?${params.toString()}`)
   return result
-}
-
-// ==================== 卡券关联商品选择弹窗 ====================
-
-// 可选商品轻量项（仅选择场景所需字段）
-export interface SelectableItem {
-  item_id: string
-  title?: string | null
-  price?: string | null
-}
-
-// 获取全部匹配的可选商品轻量项（供「全选当前筛选结果」）
-export const getAllSelectableItemKeys = (
-  keyword: string = ''
-): Promise<{ list: SelectableItem[]; total: number }> => {
-  const params = new URLSearchParams()
-  if (keyword && keyword.trim()) params.append('keyword', keyword.trim())
-  const qs = params.toString()
-  return get(`${ITEM_PREFIX}/selectable/all${qs ? `?${qs}` : ''}`)
-}
-
-// 获取卡券已关联商品的轻量详情（弹窗右侧「已选商品」展示用）
-export const getItemsByCardId = (
-  cardId: number
-): Promise<{ list: SelectableItem[]; total: number }> => {
-  return get(`${ITEM_PREFIX}/by-card/${cardId}`)
 }
 
 // 删除商品（账号可选）
@@ -156,11 +126,6 @@ export const fetchAllItemsFromAccessibleAccounts = (): Promise<FetchItemsSummary
 // 更新商品
 export const updateItem = (cookieId: string, itemId: string, data: Partial<Item>): Promise<ApiResponse> => {
   return put(`${ITEM_PREFIX}/${cookieId}/${itemId}`, data)
-}
-
-// 更新商品多数量发货状态
-export const updateItemMultiQuantityDelivery = (cookieId: string, itemId: string, enabled: boolean): Promise<ApiResponse> => {
-  return put(`${ITEM_PREFIX}/${cookieId}/${itemId}/multi-quantity-delivery`, { multi_quantity_delivery: enabled })
 }
 
 // 更新商品多规格状态

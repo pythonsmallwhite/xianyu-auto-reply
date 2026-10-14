@@ -32,10 +32,6 @@ class OrderOut(BaseModel):
     delivery_content: str | None = None  # 发货内容（卡券内容）
     delivery_fail_reason: str | None = None  # 发货失败原因
     card_only_delivered: bool = False  # 只发卡券流程已处理，防止平台待发货状态导致重复耗卡
-    # 关联自动发货消息日志的发送状态
-    delivery_send_status: str | None = None  # 消息日志发送状态：success/failed/unknown/timeout
-    delivery_send_fail_reason: str | None = None  # 消息日志发送失败原因
-    is_agent_order: bool = False  # 是否是代销订单
     source: str | None = None  # 数据来源
     placed_at: datetime | None = None  # 订单时间（下单时间）
     created_at: datetime | None = None

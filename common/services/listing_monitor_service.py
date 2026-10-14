@@ -921,13 +921,13 @@ class ListingMonitorService:
         owner_id: Optional[int],
         log_ids: Sequence[int],
     ) -> List[Dict[str, Any]]:
-        """根据监控日志ID集合，汇总去重后的账号信息（账号ID、Cookie、分销秘钥），用于复制。
+        """根据监控日志ID集合，汇总去重后的账号信息（账号ID、Cookie、外部接口秘钥），用于复制。
 
         - 账号来源：每条日志关联的监控任务(monitor_task_id) 所配置的账号列表(account_ids)；
           即"根据日志找到监控任务，再取任务里配置的采集账号"，而非日志实际执行时用到的账号
           （失败的执行可能没有记录实际账号）。
         - 多条日志可能关联同一任务，按 account_id 去重（保留首次出现顺序）；
-        - 分销秘钥：取该账号所属用户(owner)的 secret_key（个人设置-分销模块），一个账号一条。
+        - 外部接口秘钥：取该账号所属用户(owner)的 secret_key（个人设置-外部接口秘钥），一个账号一条。
 
         Returns: [{"account_id": str, "cookies": str, "secret_key": str}, ...]
         """
@@ -996,7 +996,7 @@ class ListingMonitorService:
         )
         acc_map = {acc.account_id: acc for acc in acc_rows}
 
-        # 查询各账号所属用户的分销秘钥
+        # 查询各账号所属用户的外部接口秘钥
         owner_ids = {acc.owner_id for acc in acc_rows if acc.owner_id is not None}
         secret_map: Dict[int, Optional[str]] = {}
         if owner_ids:

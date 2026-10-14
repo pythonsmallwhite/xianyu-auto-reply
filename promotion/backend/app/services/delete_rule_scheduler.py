@@ -144,7 +144,7 @@ async def _execute_single_rule(
             logger.info(
                 f"删除规则[{rule.id}] 成功删除商品: [{item_id}] {item_title or ''}"
             )
-            # 同步清理主项目数据库中的商品记录和关联卡券
+            # 同步清理主项目数据库中的商品记录
             await _sync_delete_from_db(session, rule.owner_id, item_id)
         else:
             cookies_str = result.get("cookies_str", cookies_str)
@@ -311,7 +311,7 @@ async def _sync_delete_from_db(
     """
     闲鱼商品删除成功后，同步清理主项目数据库中的关联数据
 
-    包括：xy_catalog_items、xy_cards、xy_card_item_relations
+    包括：xy_catalog_items
 
     Args:
         session: 数据库会话

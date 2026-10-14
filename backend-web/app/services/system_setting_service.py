@@ -35,7 +35,7 @@ SENSITIVE_KEYS = {
 
 DEFAULT_DISCLAIMER_CONTENT = (
     "数据存储说明\n"
-    "1. 本系统在运行过程中，为保障服务正常运行，会存储用户账号密码、登录 Cookie、商品信息、卡券信息等业务数据。\n"
+    "1. 本系统在运行过程中，为保障服务正常运行，会存储用户账号密码、登录 Cookie、商品信息、订单信息等业务数据。\n"
     "2. 上述数据仅用于系统功能运行、自动化处理和业务管理，不作为其他用途。\n"
     "3. 请您自行确认服务器环境、账号权限和数据保管措施的安全性。\n\n"
     "用户须知\n"
@@ -69,11 +69,6 @@ DEFAULT_SYSTEM_SETTINGS: dict[str, tuple[str, str | None]] = {
     # api_url 默认空字符串表示未配置；enabled 默认 false 表示不启用
     "proxy.api_url": ("", "代理 API 的 URL（可能较长，用于配置外部代理服务）"),
     "proxy.enabled": ("false", "是否启用代理（true/false）"),
-    # 用户到期/续期设置
-    # renew_month_price：续期一个月的价格（元），空表示未配置（续期功能不可用）
-    # register_default_days：注册用户默认有效天数，空表示注册不设置到期日（永不过期）
-    "user.renew_month_price": ("", "用户续期一个月的价格（元），空=未配置"),
-    "user.register_default_days": ("", "注册用户默认有效天数（空=不设置到期日）"),
     # real_mouse 过滑块本地/远程排队权重（默认 1:1，多来源同时排队时按比例放行）
     "captcha.real_mouse_weight_local": ("1", "real_mouse过滑块本地排队权重"),
     "captcha.real_mouse_weight_remote": ("1", "real_mouse过滑块远程排队权重"),
@@ -115,20 +110,8 @@ NO_ESCAPE_KEYS = {
     "smtp_port",
     "smtp_use_tls",
     "smtp_use_ssl",
-    "distribution.fee_type",
-    "distribution.fee_rate",
-    "alipay.app_id",
-    "alipay.private_key",
-    "alipay.alipay_public_key",
-    "alipay.gateway_url",
-    "alipay.notify_url",
-    "withdraw.notify_email",
-    "withdraw.min_amount",
     "log.retention_days",
     "account.face_verify_timeout_disable",
-    # 用户到期/续期设置：均为数字字符串，无需 XSS 转义
-    "user.renew_month_price",
-    "user.register_default_days",
     # 代理设置：URL 含 :、/、?、&、= 等字符不能被 XSS 转义；布尔字符串"true"/"false"也无需转义
     "proxy.api_url",
     "proxy.enabled",

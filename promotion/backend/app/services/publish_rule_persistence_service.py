@@ -132,26 +132,6 @@ async def save_publish_success(
                 rule.last_run_at = published_at
                 rule.last_run_date = today
                 await session.commit()
-                owner_id = int(material.owner_id)
-                published_item_id_str = str(published_item_id or "").strip()
-                if published_item_id_str:
-                    try:
-                        from app.services.publish_coupon_card_service import ensure_publish_coupon_card
-
-                        card_result = await ensure_publish_coupon_card(
-                            material_id=material_id,
-                            user_id=owner_id,
-                            published_item_id=published_item_id_str,
-                        )
-                        if card_result.get("success"):
-                            logger.info(
-                                f"素材[{material_id}]自动建卡完成: card_id={card_result.get('card_id')}, "
-                                f"created={card_result.get('created')}, updated={card_result.get('updated')}"
-                            )
-                        else:
-                            logger.warning(f"素材[{material_id}]自动建卡跳过: {card_result.get('message', '')}")
-                    except Exception as card_exc:
-                        logger.warning(f"素材[{material_id}]发布成功后自动建卡失败，不影响发布结果: {card_exc}")
                 return
         except Exception as exc:
             last_error = exc

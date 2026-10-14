@@ -26,10 +26,6 @@ export default function MineStackLayout() {
       <Stack.Screen name="announcements" options={{ title: '公告' }} />
       <Stack.Screen name="data-analysis" options={{ title: '数据分析' }} />
       <Stack.Screen name="feedback" options={{ title: '反馈' }} />
-      <Stack.Screen name="distribution" options={{ title: '分销管理' }} />
-      <Stack.Screen name="distribution-supply" options={{ title: '货源广场' }} />
-      <Stack.Screen name="distribution-pickup" options={{ title: '分销卡券' }} />
-      <Stack.Screen name="distribution-sub-dealers" options={{ title: '下级分销商' }} />
       <Stack.Screen name="crawler" options={{ title: '爬虫任务' }} />
       <Stack.Screen name="listing-monitor" options={{ title: '上新监控' }} />
       <Stack.Screen name="monitor-categories" options={{ title: '监控分类' }} />
@@ -48,8 +44,6 @@ export default function MineStackLayout() {
       <Stack.Screen name="disclaimer" options={{ title: '免责声明' }} />
       <Stack.Screen name="tutorial" options={{ title: '使用教程' }} />
       <Stack.Screen name="about" options={{ title: '关于' }} />
-      <Stack.Screen name="cards" options={{ title: '卡券管理' }} />
-      <Stack.Screen name="card-item-relation" options={{ title: '关联商品' }} />
       <Stack.Screen name="blacklist" options={{ title: '黑名单管理' }} />
       <Stack.Screen name="risk-logs" options={{ title: '风控日志' }} />
       <Stack.Screen name="notification-channels" options={{ title: '通知渠道' }} />

@@ -19,23 +19,10 @@ class AccountDetail(BaseModel):
     id: str
     value: str
     enabled: bool
-    auto_confirm: bool
-    scheduled_redelivery: bool = False
     scheduled_rate: bool = False
     auto_polish: bool = False
-    confirm_before_send: bool = False
-    send_before_confirm: bool = False
-    only_send_card: bool = False
     auto_red_flower: bool = False
     ai_reply_block_ordered_users: bool = False
-    delivery_disabled: bool = False
-    delivery_disabled_reason: str | None = None
-    auto_close_order: bool = False
-    delivery_only_card_after_close: bool = False
-    delivery_disabled_excluded_item_ids: list[str] = Field(
-        default_factory=list,
-        description="禁止发货排除商品列表（命中此列表的 item_id 不受禁止发货拦截）",
-    )
     remark: str | None = None
     pause_duration: int | None = None
     message_expire_time: int | None = None
@@ -87,10 +74,6 @@ class AccountRemarkUpdate(BaseModel):
     remark: str
 
 
-class AccountAutoConfirmUpdate(BaseModel):
-    auto_confirm: bool
-
-
 class AccountPublishCapacityUpdate(BaseModel):
     remaining_publish_capacity: int = Field(..., ge=0, description="当前账号剩余可发布数量")
 
@@ -121,11 +104,6 @@ class AccountReplyDelayUpdate(BaseModel):
     reply_delay_seconds: int = Field(..., ge=0, le=3600, description="自动回复延迟时间(秒)，范围0-3600，0表示立即回复")
 
 
-class AccountScheduledRedeliveryUpdate(BaseModel):
-    """定时补发货开关更新"""
-    scheduled_redelivery: bool = Field(..., description="定时补发货开关")
-
-
 class AccountScheduledRateUpdate(BaseModel):
     """定时补评价开关更新"""
     scheduled_rate: bool = Field(..., description="定时补评价开关")
@@ -137,21 +115,6 @@ class AccountAutoPolishUpdate(BaseModel):
     auto_polish: bool = Field(..., description="商品自动擦亮开关")
 
 
-class AccountConfirmBeforeSendUpdate(BaseModel):
-    """发货成功再发卡券开关更新"""
-    confirm_before_send: bool = Field(..., description="发货成功再发卡券开关")
-
-
-class AccountSendBeforeConfirmUpdate(BaseModel):
-    """卡券发送成功再确认发货开关更新"""
-    send_before_confirm: bool = Field(..., description="卡券发送成功再确认发货开关")
-
-
-class AccountOnlySendCardUpdate(BaseModel):
-    """只发卡券、不确认发货开关更新"""
-    only_send_card: bool = Field(..., description="只发卡券不确认发货开关")
-
-
 class AccountAutoRedFlowerUpdate(BaseModel):
     """自动求小红花开关更新"""
     auto_red_flower: bool = Field(..., description="自动求小红花开关")
@@ -160,61 +123,3 @@ class AccountAutoRedFlowerUpdate(BaseModel):
 class AccountAiReplyBlockOrderedUsersUpdate(BaseModel):
     """已下单用户禁止AI回复开关更新"""
     ai_reply_block_ordered_users: bool = Field(..., description="已下单用户禁止AI回复开关")
-
-
-class AccountDeliveryDisabledUpdate(BaseModel):
-    """禁止发货设置更新（已废弃，保留向后兼容）"""
-    delivery_disabled: bool = Field(..., description="禁止发货开关")
-    delivery_disabled_reason: str | None = Field(
-        default=None,
-        max_length=500,
-        description="禁止发货原因",
-    )
-    auto_close_order: bool = Field(
-        default=False,
-        description="命中禁止发货时是否主动关闭订单",
-    )
-    delivery_only_card_after_close: bool = Field(
-        default=False,
-        description="关闭订单后继续发货（仅发卡券，不调发货/免拼接口）。仅在 auto_close_order=True 时生效",
-    )
-    excluded_item_ids: list[str] = Field(
-        default_factory=list,
-        description="禁止发货排除商品列表（命中此列表的 item_id 跳过禁止发货拦截，按正常流程发货）",
-    )
-
-
-class DeliveryBlockRuleItem(BaseModel):
-    """单条禁止发货规则配置"""
-    rule_code: str = Field(..., description="规则编码")
-    enabled: bool = Field(default=False, description="规则开关")
-    priority: int = Field(default=0, description="执行优先级（越小越先执行）")
-    block_reason: str | None = Field(
-        default=None,
-        max_length=500,
-        description="禁止发货原因（发给买家的消息）",
-    )
-    auto_close_order: bool = Field(
-        default=False,
-        description="命中后主动关闭订单",
-    )
-    only_card_after_close: bool = Field(
-        default=False,
-        description="关闭订单后继续发货（只发卡券）",
-    )
-    excluded_item_ids: list[str] = Field(
-        default_factory=list,
-        description="该规则的排除商品列表（命中则跳过本规则）",
-    )
-    config: dict | None = Field(
-        default=None,
-        description="规则专属参数",
-    )
-
-
-class DeliveryBlockRulesUpdate(BaseModel):
-    """禁止发货规则批量更新"""
-    rules: list[DeliveryBlockRuleItem] = Field(
-        ...,
-        description="规则配置列表",
-    )

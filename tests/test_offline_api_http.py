@@ -72,8 +72,6 @@ class OfflineHttpContractTests(unittest.TestCase):
         cls.router_module, cls.deps, cls.actions = _load_internal_products_router(cls)
         from common.db.base_class import Base
         cls.Base = Base
-        from common.models.card import Card
-        from common.models.card_item_relation import CardItemRelation
         from common.models.xy_catalog_item import XYCatalogItem
         from common.models.xy_keyword_rule import XYKeywordRule
         from common.models.internal_product import InternalProduct, InternalProductListing

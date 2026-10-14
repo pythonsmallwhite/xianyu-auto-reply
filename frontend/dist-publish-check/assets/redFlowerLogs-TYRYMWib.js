@@ -1,0 +1,1 @@
+import{c as a}from"./batchLogFactory-DMC3UhUK.js";const e=a({batches:"red-flower-batches",clearLogs:"red-flower-logs/clear"}),c=e.getBatches,o=e.getBatchDetail,s=e.clearLogs;export{o as a,s as c,c as g};

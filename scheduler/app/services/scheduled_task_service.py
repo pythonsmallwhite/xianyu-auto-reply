@@ -19,7 +19,6 @@ from common.models.scheduled_task import ScheduledTask
 
 
 # 任务代码常量
-TASK_CODE_REDELIVERY = "redelivery"
 TASK_CODE_RATE = "rate"
 TASK_CODE_POLISH = "polish"
 TASK_CODE_DAY_SWITCH = "day_switch"
@@ -36,17 +35,14 @@ TASK_CODE_API_COOKIE_RENEW = "api_cookie_renew"
 TASK_CODE_CLOSE_NOTICE = "close_notice"
 TASK_CODE_RED_FLOWER = "red_flower"
 TASK_CODE_DB_BACKUP = "db_backup"
-TASK_CODE_DELIVERY_TIMEOUT = "delivery_timeout"
 TASK_CODE_LISTING_MONITOR = "listing_monitor"
 TASK_CODE_SELLER_FILL = "seller_fill"
 TASK_CODE_DM_SEND = "dm_send"
 TASK_CODE_AUTO_ORDER = "auto_order"
 TASK_CODE_IMAGE_CLEANUP = "image_cleanup"
-TASK_CODE_AUTO_RELIST = "auto_relist_scan"
 
 # 默认配置（数据库无配置时使用）
 DEFAULT_CONFIGS = {
-    TASK_CODE_REDELIVERY: {"interval_seconds": 5, "enabled": True},
     TASK_CODE_RATE: {"interval_seconds": 20, "enabled": True},
     TASK_CODE_POLISH: {"interval_seconds": 60, "enabled": True},
     TASK_CODE_DAY_SWITCH: {"interval_seconds": 60, "enabled": True},
@@ -63,13 +59,11 @@ DEFAULT_CONFIGS = {
     TASK_CODE_CLOSE_NOTICE: {"interval_seconds": 600, "enabled": False},
     TASK_CODE_RED_FLOWER: {"interval_seconds": 300, "enabled": True},
     TASK_CODE_DB_BACKUP: {"interval_seconds": 3600, "enabled": True},
-    TASK_CODE_DELIVERY_TIMEOUT: {"interval_seconds": 60, "enabled": True},
     TASK_CODE_LISTING_MONITOR: {"interval_seconds": 60, "enabled": True},
     TASK_CODE_SELLER_FILL: {"interval_seconds": 60, "enabled": True},
     TASK_CODE_DM_SEND: {"interval_seconds": 60, "enabled": True},
     TASK_CODE_AUTO_ORDER: {"interval_seconds": 60, "enabled": True},
     TASK_CODE_IMAGE_CLEANUP: {"interval_seconds": 1200, "enabled": True},
-    TASK_CODE_AUTO_RELIST: {"interval_seconds": 30, "enabled": True},
 }
 
 

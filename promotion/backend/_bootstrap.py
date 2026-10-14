@@ -78,11 +78,6 @@ async def lifespan(app: FastAPI):
     publish_task = asyncio.create_task(run_publish_rule_scheduler())
     logger.info("发布规则定时任务已注册")
 
-    # 启动发布卡券补偿定时任务
-    from app.services.publish_coupon_card_scheduler import run_publish_coupon_card_scheduler
-    publish_coupon_card_task = asyncio.create_task(run_publish_coupon_card_scheduler())
-    logger.info("发布卡券补偿定时任务已注册")
-
     # 启动发布后商品ID回写补偿定时任务
     from app.services.published_item_id_repair_scheduler import run_published_item_id_repair_scheduler
     published_item_id_repair_task = asyncio.create_task(run_published_item_id_repair_scheduler())
@@ -103,7 +98,6 @@ async def lifespan(app: FastAPI):
     # 停止定时任务
     scheduler_task.cancel()
     publish_task.cancel()
-    publish_coupon_card_task.cancel()
     published_item_id_repair_task.cancel()
     material_short_url_repair_task.cancel()
     delete_rule_task.cancel()

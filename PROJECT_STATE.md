@@ -42,6 +42,7 @@
 | R13 | 评估并修复聊天实时同步及移动可用性 | 用户要求评估 #304/#339；一期优先级为本轮技术建议 | 进行中；广播集合并发、历史错误伪空列表、切会话旧请求覆盖已修复并离线验证；本轮完成重连补拉（区分首连/重连）、稳定 `messageId` 去重合并、会话列表分页保留、非当前会话缓存更新、迟到发送结果按账号/会话隔离；Android 聊天详情与列表同步实现消息合并、重连补拉、账号标识、贴底滚动与分页入口修正，21 项离线场景通过并逐条变异证伪 | 浏览器/真机内真实重连与后台恢复交错验证、后台恢复缓存刷新穷尽验证、移动窄屏其余页面与 Release APK 真机验收仍未完成 |
 | R14 | Ubuntu 单台云服务器、一键部署 | 用户直接指定 / 本轮协调任务；2026-10-13 用户要求把服务器重装为 Ubuntu 24.04，生成自动安装组件、构建镜像并部署的脚本并推送 | 已实现待验证；`scripts/install-ubuntu.sh` 一键首装（Docker 国内源/镜像加速/日志轮转、swap、源码构建、可导入旧数据），`scripts/deploy-ubuntu.sh update` 更新并在迁移或健康失败时回滚到上次成功版本，`scripts/export-for-migration.sh` 旧服务器导出；脚本合同、函数沙箱和桩 docker 端到端模拟通过 | 干净 Ubuntu 24.04 真机首装/导入/更新/重启实测仍待完成；fork 代码在真实 MySQL 上的迁移与运行尚未验证 |
 | R15 | 评估风控时间/筛选与浏览器替换 | 用户指定 #99/#302 | 已完成代码层评估；#99 一期回归/必要局部修复，#302 二期试验为技术建议 | #99 现有筛选经查询提交，数据库时区和无时区序列化待实测；#302 不按“完美迁移”假设整体替换 |
+| R17 | 删除卡密（卡券）与自动发货功能及其衍生功能 | 2026-10-13 用户直接要求”我本质不需要这个项目的卡密和自动发货功能……帮我删除相关代码”；确认范围：分销体系一起删除、余额充值/支付宝/管理员调余额/用户到期续期一起删除、商品监控（捡漏）保留 | 已实现待验证（见第 9 节 2026-10-14 R17 完成记录）；Web vite build ✓、移动 tsc --noEmit ✓；未提交 | 旧库表未 DROP；需真实部署后确认无残留入口 |
 | R16 | 自用部署移除广告、远程官方内容、演示代码及第三方推广 | 2026-10-13 用户直接要求“清除这些广告，并且去除演示的代码”；补充“自己部署自用，所有第三方的都去除”，删除深度选“彻底删除” | 已实现待验证（已推送；服务器仍运行上游镜像，远程广告开关已关，待用户运行 `scripts/update-server.sh`）；广告模块（展示/申请/审核/付费）、远程官方广告/公告/弹窗拉取、登录页底部广告、演示账号、作者群/赞赏二维码、返佣链接、上游更新检查已从 Web/后端/手机端/桌面启动器删除；Web tsc+vite build、移动 tsc、py_compile、静态结构检查通过 | 服务器重新构建部署后浏览器确认仪表盘/弹窗/登录页无广告；旧库 xy_advertisements 表及 auth.footer_ad_html/show_default_login_info 设置行保留未删（已无代码读取）；Python 全套因缺 SQLAlchemy 未运行 |
 
 
@@ -935,3 +936,17 @@
 - 用户反馈（2026-10-13）：拉最新代码部署后仍有广告，并要求先列出其需求。核对发现：根目录 `deploy.sh`/`update.sh`/`deploy_remote.sh` 及 README 原有 `curl ... xy-update.zhinianboke.com ... | bash` 一键部署每次重新生成 compose 并使用原作者预构建镜像（`registry.cn-shanghai.aliyuncs.com/zhinian-software/*`），不含本 fork 改动；且 `480a684` 删除了这些脚本中的 `ENABLE_REMOTE_*` 变量，导致用上游镜像重新部署时失去“关闭远程广告”的开关、恢复上游默认 true（本轮引入的回退）。尚未确认用户实际部署方式与运行镜像；待用户执行 `docker ps --format '{{.Names}} {{.Image}}'` 后决定修复（建议移除/改造上游镜像脚本与 README 上游一键部署说明，统一走源码构建）。
 - 用户确认实际执行的是根目录 `bash deploy.sh`（即原作者镜像，确认广告来源）。修复：根目录 `deploy.sh` 改为本 fork 统一入口，只从源码构建——Ubuntu 新机调用 `install-ubuntu.sh`；已部署则 `deploy-ubuntu.sh update`，若旧版 `xianyu-*` 容器仍在运行则更新成功后停用（防止新旧两套同时连账号重复自动回复）；同机存在旧版部署时自动迁移：旧站点运行期间 `install-ubuntu.sh --build-only` 构建 → 停旧版应用（`docker update --restart=no` + stop，不删容器/数据）→ `export-for-migration.sh` 导出（或用 `--import` 指定的上传数据包）→ 停旧版 MySQL/Redis → `install-ubuntu.sh --import` 启动新版；任一步失败（EXIT trap）停新版应用并恢复旧版。默认端口 80，80 被其他程序占用且未指定 `--port` 时沿用旧版端口；指定端口被占用则在动旧站点前退出。发现已上传数据包但未选择 `--import`/`--no-bundle` 时停止询问。非 Ubuntu 且有旧版部署走 `scripts/update-server.sh`。`update.sh` 改为调用 `deploy.sh update`，`deploy_remote.sh`（原作者远程库 + 预构建镜像）改为提示已移除。README 删除原作者 `curl ... xy-update.zhinianboke.com | bash` 一键部署与远程部署章节。配套：`deploy-ubuntu.sh` 新增 `build` 命令、部署成功写 `deployed.ok`、上一次首装导入从未部署成功时允许重建库后导入新数据包（成功部署后仍拒绝）；`install-ubuntu.sh --build-only`、已有配置时磁盘要求降为 10GB；`export-for-migration.sh` 支持 `EXPORT_PATH_FILE`/`EXPORT_QUIET` 与无 compose 文件时按容器名查找。
 - 验证：新增 `tests/test_deploy_entry.sh` 22 项（桩 docker + 桩子脚本运行真实 `deploy.sh`：新机首装、发现数据包要求选择、`--import`、旧版迁移顺序与旧容器停用且不自启、迁移失败恢复旧版、端口占用回退/拒绝、已部署更新后停旧版、CentOS 原地更新、非法端口）；`tests/test_ubuntu_install.sh` 51、`test_ubuntu_deploy.sh` 29、`test_ubuntu_bootstrap.sh` 24、`test_update_server.sh` 28，全部通过。仍未在真实服务器运行。仓库内仍引用上游镜像/地址的：根 `docker-compose.yml` 的 MySQL/Redis 默认镜像（开发用 build.sh 路径）、桌面启动器 exe 自动更新地址、上游 Jenkins 流水线脚本、`update-server.sh` 快速构建底座回退（仅用其依赖层）。
+
+### 2026-10-13：R17 删除卡密与自动发货（进行中）
+
+- 范围（用户确认）：删除卡券管理、自动发货（含自动确认发货/免拼/仅发卡券/发货前确认）、禁止发货规则、同意后发货与提货页、定时补发货与发货超时检测、亦凡卡券 API、退款注销卡券、多数量发货；分销体系（货源广场、分销卡券对接、对接记录/下级、代销订单、资金流水、结算提现、对接码/对接卡密秘钥）；余额充值/支付宝/管理员调余额/用户到期续期（含到期自动禁用账号与注册默认有效期）。自动续售（auto_relist：成交后按卡券关联自动重新发布）强依赖卡券（规则必填 card_id、关联校验），一并删除。保留：订单同步与订单列表、内部库存联动（R05，挂在 OrderService 订单事件，与自动发货无关）、自动回复/AI 回复、自动评价、确认收货消息、聊天、商品发布/下架/编辑/擦亮、商品监控（捡漏）、外部接口及其 `users.secret_key`（改名为“外部接口秘钥”）。
+- 数据库：删除相关表的建表/补字段/默认设置/定时任务种子；已有库中的表、列与数据不 DROP。xy_accounts 等共享表中的发货相关列保留不用。
+- 执行顺序：后端 Python（删模块 → 修导入方 → 路由/WS/定时任务 → init_database）→ 静态导入检查 → Web → 移动端 → tsc/build → 测试/README → 提交推送。
+
+### 2026-10-14：R17 删除卡密与自动发货（已完成，未提交）
+
+- 完成时间：2026-10-14，接续上一轮 2026-10-13 进行中的 R17。
+- 本轮唯一修复：`xianyu-mobile/app/(tabs)/mine/settings.tsx` 中 lucide 图标清理脚本将 `Settings as SettingsIcon` 误删（别名 `SettingsIcon` 在 body 中被使用但正则未能识别为同一个名字），导致 `tsc --noEmit` 报 `SettingsIcon is not defined`。补回 `Settings as SettingsIcon` 后 tsc 零错误通过。
+- 验证：`tsc --noEmit`（xianyu-mobile）无输出（✓）；Web `vite build` 在上一轮已验证（✓）；Python `py_compile` 与 `check_static.py` 在上一轮已验证（✓）。
+- 当前状态：全部改动未提交，工作区约 120+ 文件变更（backend-web、websocket、scheduler、common、frontend/src、xianyu-mobile）。旧数据库表未 DROP，已有库中发货相关列保留不用。
+- 下一步：按用户意愿提交并推送（建议一个单独 commit 打包 R17 全部改动），再真实部署后确认无残留入口。

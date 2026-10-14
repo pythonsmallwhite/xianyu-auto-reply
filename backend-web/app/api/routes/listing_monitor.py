@@ -431,7 +431,7 @@ async def copy_listing_monitor_log_cookies(
     current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Dict[str, Any]:
-    """汇总选中监控日志涉及的账号（去重），返回账号ID/Cookie/分销秘钥，供前端复制为JSON"""
+    """汇总选中监控日志涉及的账号（去重），返回账号ID/Cookie/外部接口秘钥，供前端复制为JSON"""
     owner_id, _ = resolve_owner_scope(current_user)
     svc = ListingMonitorService(session)
     try:
