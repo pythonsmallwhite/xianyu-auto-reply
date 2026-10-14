@@ -37,8 +37,10 @@ check_prereqs(){
   docker info >/dev/null 2>&1 || die "Docker daemon is not reachable"
   docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required"
   [[ -f "$COMPOSE_FILE" ]] || die "missing Compose file"
-  local free_kb; free_kb="$(df -Pk "$STATE_DIR" | awk 'NR==2{print $4}')"
-  [[ "$free_kb" =~ ^[0-9]+$ && "$free_kb" -ge 10485760 ]] || die "at least 10 GiB free disk is required"
+  local free_kb need_gb; free_kb="$(df -Pk "$STATE_DIR" | awk 'NR==2{print $4}')"
+  # 首次部署需要空间建库+导入数据；已有 .env（更新场景）只需重建镜像层，3GB 足够
+  if [[ -f "$ENV_FILE" ]]; then need_gb=3; else need_gb=10; fi
+  [[ "$free_kb" =~ ^[0-9]+$ && "$free_kb" -ge $((need_gb * 1048576)) ]] || die "at least ${need_gb} GiB free disk is required"
   local port; port="$(env_value PUBLIC_HTTP_PORT)"; port="${port:-8080}"
   [[ "$port" =~ ^[0-9]+$ && "$port" -ge 1 && "$port" -le 65535 ]] || die "invalid PUBLIC_HTTP_PORT"
   # 端口被本项目正在运行的前端占用属于正常（更新时）；被其他程序占用才报错
