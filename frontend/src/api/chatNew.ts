@@ -181,6 +181,35 @@ export const queryUserInfos = async (
   return res.data || {}
 }
 
+// ==================== 图片代理 ====================
+
+/**
+ * 把闲鱼 CDN 图片 URL 转为后端代理路径，绕过 Referer 防盗链
+ * 只转换来自闲鱼/淘宝 CDN 的图片，本地或已代理的 URL 直接返回
+ */
+export function proxyCdnImageUrl(url: string): string {
+  if (!url) return url
+  // 已经是代理路径或 blob 或本地
+  if (url.startsWith('/api/') || url.startsWith('blob:') || url.startsWith('data:')) return url
+  try {
+    const host = new URL(url).hostname.toLowerCase()
+    const CDN_HOSTS = [
+      'img.alicdn.com', 'gw.alicdn.com', 'g.alicdn.com',
+      'img.taobao.com', 'goofish.com',
+      'goofish-prod.oss-cn-hangzhou.aliyuncs.com',
+      'img01.taobaocdn.com', 'img02.taobaocdn.com',
+      'img03.taobaocdn.com', 'img04.taobaocdn.com',
+      'img05.taobaocdn.com', 'cbu01.alicdn.com',
+    ]
+    if (CDN_HOSTS.some(h => host === h || host.endsWith('.' + h))) {
+      return `/api/v1/chat-new/image-proxy?url=${encodeURIComponent(url)}`
+    }
+  } catch {
+    // 非合法 URL，原样返回
+  }
+  return url
+}
+
 export const recallMessage = (
   accountId: string,
   messageId: string,

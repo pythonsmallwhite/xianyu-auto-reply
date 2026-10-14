@@ -25,6 +25,7 @@ import {
   recallMessage,
   getOfficialBlacklistStatus,
   changeOfficialBlacklist,
+  proxyCdnImageUrl,
   type ChatAccount,
   type Conversation,
   type ChatMessage,
@@ -1557,10 +1558,10 @@ export function ChatNew() {
                             {msg.images.map((url, i) => (
                               <img
                                 key={i}
-                                src={url}
+                                src={proxyCdnImageUrl(url)}
                                 className="max-w-full rounded max-h-48 object-contain cursor-pointer hover:opacity-80 transition-opacity"
                                 alt="图片消息"
-                                onClick={() => setPreviewImage(url)}
+                                onClick={() => setPreviewImage(proxyCdnImageUrl(url))}
                               />
                             ))}
                           </div>
