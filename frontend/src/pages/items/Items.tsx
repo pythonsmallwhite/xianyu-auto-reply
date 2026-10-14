@@ -1,5 +1,6 @@
 import { OfflineBatches } from './OfflineBatches'
 import { useEffect, useState, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { CheckSquare, Download, Edit2, ExternalLink, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Tag } from 'lucide-react'
 import { batchDeleteItems, batchDeleteXianyuItems, batchOfflineItems, deleteItem, fetchAllItemsFromAccessibleAccounts, fetchAllItemsFromAccount, getItemsPaginated, updateItem, updateItemMultiSpec, updateItemPrice, getItemDefaultReply, saveItemDefaultReply, deleteItemDefaultReply, batchSaveItemDefaultReply, batchDeleteItemDefaultReply, getItemAiPrompt, saveItemAiPrompt, batchDeleteItemAiPrompt, batchSaveItemAiPrompt, uploadItemDefaultReplyImage, uploadBatchDefaultReplyImage, type ItemFilterParams } from '@/api/items'
 import { getAccountDetails } from '@/api/accounts'
@@ -29,10 +30,11 @@ const EMPTY_LOCATION_REPLY: LocationContactReplyValue = {
 export function Items() {
   const { addToast } = useUIStore()
   const { isAuthenticated, token, _hasHydrated } = useAuthStore()
+  const [searchParams] = useSearchParams()
   const [loading, setLoading] = useState(true)
   const [items, setItems] = useState<Item[]>([])
   const [accounts, setAccounts] = useState<Account[]>([])
-  const [selectedAccount, setSelectedAccount] = useState('')
+  const [selectedAccount, setSelectedAccount] = useState(() => searchParams.get('account') || '')
   const [showHistory, setShowHistory] = useState(false)
   const [searchKeyword, setSearchKeyword] = useState('')
   const [selectedIds, setSelectedIds] = useState<Set<string | number>>(new Set())

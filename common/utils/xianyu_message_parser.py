@@ -25,6 +25,8 @@ import base64
 import json
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from loguru import logger
+
 # 已知的消息内容标识键：命中任一即认为该 dict 是一条消息内容载荷
 _CONTENT_KEYS = ("text", "image", "picUrl", "audio")
 
@@ -134,6 +136,9 @@ def interpret_content(decoded: Dict[str, Any]) -> Tuple[str, List[str], str]:
     if "picUrl" in decoded and decoded.get("picUrl"):
         return ("", [str(decoded["picUrl"])], "image")
 
+    # 未识别类型：打印完整结构方便调试视频/拍下消息等
+    content_type = decoded.get("contentType", "?")
+    logger.debug(f"[消息解析] 未识别 contentType={content_type}，完整内容: {decoded}")
     return ("", [], "")
 
 
