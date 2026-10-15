@@ -104,6 +104,25 @@ npx expo start --dev-client
 
 ### Release APK 构建
 
+#### Ubuntu 一键构建
+
+在仓库根目录执行以下命令。脚本会检查并准备 Java 17、Node.js、Android SDK/NDK、CMake 和 Gradle，运行 TypeScript 检查与 `assembleRelease`，最后在 `release/android/` 输出 APK 和 SHA256 文件。服务器需要能访问依赖仓库；若服务器通过代理联网，先设置 `HTTPS_PROXY`，并可用 `ANDROID_SDK_PROXY` 单独配置 `sdkmanager`。
+
+```bash
+HTTPS_PROXY=http://127.0.0.1:7890 \
+ANDROID_SDK_PROXY=http://127.0.0.1:7890 \
+bash scripts/build-android-apk.sh
+```
+
+脚本默认复用 Gradle 9.3.1；官方分发下载受限时可指定镜像：
+
+```bash
+GRADLE_DIST_URL=https://repo.huaweicloud.com/gradle/gradle-9.3.1-bin.zip \
+bash scripts/build-android-apk.sh
+```
+
+输出文件名类似 `release/android/xianyu-mobile-1.0.11-20261015T000000Z.apk`，版本来自 `android/app/build.gradle`。当前工程的 Release 构建使用自用 debug keystore 签名，适合个人安装；正式发布前应替换为自己的 release keystore。
+
 因 Windows 中文路径会导致 Gradle 失败，需同步到 ASCII 路径副本构建：
 
 ```bash
