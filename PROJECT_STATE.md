@@ -1,6 +1,6 @@
 # 项目需求与 AI 交接文档
 
-更新时间：2026-10-15（Asia/Shanghai；main / 7c592c9；Android Ubuntu 构建脚本已完成，待本轮提交推送；未在本机生成 APK）
+更新时间：2026-10-15（Asia/Shanghai；main / 202d7df；Android Ubuntu 构建脚本已提交并推送；未在本机生成 APK）
 
 > 发给下一位 AI 的统一入口，每轮开发结束必须更新。已收录需求确认稿 v0.5 全文及后续口径；原文中的建议和待定项不等于用户已确认需求。
 
@@ -125,11 +125,11 @@
 
 ### 最新：2026-10-15 R07 Android APK Ubuntu 构建脚本（已实现待服务器验证）
 
-- 接手 main / `7c592c97f5745afa34d0a7b6e273441fee4c71b0`，工作区干净；7c592c9 已推送 origin/main。本轮沿用 project-handoff 与 Windows 操作规范，无并行 worker。
+- 接手 main / `7c592c97f5745afa34d0a7b6e273441fee4c71b0`，最终提交 `202d7dfc8b1fe2341d642d93af1ec95056917586` 已推送 origin/main，工作区干净。本轮沿用 project-handoff 与 Windows 操作规范，无并行 worker。
 - 工程：xianyu-mobile 为 Expo 57 / React Native 0.86.2，已有 android 原生工程；Gradle wrapper 9.3.1，versionName 1.0.11 / versionCode 6，applicationId com.xianyu.mobile；现有 release 配置使用仓库 debug.keystore 签名，保留该配置以生成自用安装包。服务器地址由用户在 App 内设置。
 - 本轮新增 `scripts/build-android-apk.sh`、`tests/test_android_build.sh`，并在 `xianyu-mobile/README.md` 增加 Ubuntu 用法。脚本检查 Ubuntu、完整 JDK 17（含 javac/jlink）、Node 20+，准备 Android command-line tools、platform-tools、Android 36、Build Tools 36.0.0、NDK 27.1.12297006、CMake 3.22.1 和 Gradle 9.3.1；支持 `HTTPS_PROXY`/`ANDROID_SDK_PROXY`、Gradle 镜像、npm legacy peer deps，执行 tsc、assembleRelease、SHA256 和 apksigner 校验，输出 `release/android/`。
 - 本机验证：手机端完整 `node node_modules/typescript/bin/tsc --noEmit` 退出 0；脚本 `--help` 和 `bash -n` 通过；`bash tests/test_android_build.sh` 全部检查通过。实际 Windows assembleRelease 已推进到 C++ 原生编译，但因 Java 17 JBR 缺少 jlink 且 Google Maven 首次连接超时未生成 APK；用户已明确改为自己在 Ubuntu 执行脚本。脚本和测试未连接服务器，未声称服务器构建通过。
-- 提交边界：本轮仅脚本、移动 README、静态测试和本文，构建缓存、node_modules、Gradle 输出均未跟踪。下一步提交并推送 main；用户在 Ubuntu 仓库根目录运行 `HTTPS_PROXY=... ANDROID_SDK_PROXY=... bash scripts/build-android-apk.sh`，取 `release/android/*.apk`。
+- 提交边界：本轮仅脚本、移动 README、静态测试和本文，构建缓存、node_modules、Gradle 输出均未跟踪；已随 `202d7df` 提交并推送。用户在 Ubuntu 仓库根目录运行 `HTTPS_PROXY=... ANDROID_SDK_PROXY=... bash scripts/build-android-apk.sh`，取 `release/android/*.apk`。
 
 ### 历史：2026-10-15 R12 按 PR #58 接入视频收发（离线验证完成）
 
