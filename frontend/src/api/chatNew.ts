@@ -165,6 +165,35 @@ export const sendImageMessage = async (
   )
 }
 
+/** 上传并发送聊天视频；独立超时覆盖 CDN 上传和 IM 回执等待。 */
+export const sendVideoMessage = async (
+  accountId: string,
+  cid: string,
+  toUserId: string,
+  file: File,
+): Promise<{ success: boolean; message: string; data?: { messageId: string; videoUrl: string; videoCoverUrl?: string } }> => {
+  const formData = new FormData()
+  formData.append('cid', cid)
+  formData.append('toUserId', toUserId)
+  formData.append('video', file)
+  return post(`${PREFIX}/send-video/${accountId}`, formData, { timeout: 240000 })
+}
+
+/** 视频媒体 ID 使用的域名走新增代理，其余 CDN 继续复用原图片代理。 */
+export function proxyCdnVideoUrl(url: string): string {
+  const proxied = proxyCdnImageUrl(url)
+  if (proxied !== url || !url) return proxied
+  try {
+    const host = new URL(url).hostname.toLowerCase()
+    if (['dingtalk.cn', 'dingtalk.com'].some(h => host === h || host.endsWith('.' + h))) {
+      return `${PREFIX}/video-proxy?url=${encodeURIComponent(url)}`
+    }
+  } catch {
+    // 本地预览 URL 保持原样。
+  }
+  return proxied
+}
+
 /** 用户信息查询结果 */
 export interface UserInfoResult {
   avatar: string

@@ -24,6 +24,7 @@ from . import (
     chat_new,
     chat_new_ws,
     chat_new_image,
+    chat_new_video,
     chat_new_proxy,
     chat_quick_phrase,
     chat_customer_order,
@@ -186,6 +187,7 @@ api_router.include_router(search.router, tags=["商品搜索"])  # 已定义pref
 api_router.include_router(chat_new.router, tags=["在线聊天(新)"])  # 已定义prefix="/chat-new"
 api_router.include_router(chat_new_ws.router, tags=["在线聊天(新)WebSocket"])  # 已定义prefix="/chat-new"
 api_router.include_router(chat_new_image.router, tags=["在线聊天(新)图片发送"])  # 已定义prefix="/chat-new"
+api_router.include_router(chat_new_video.router, tags=["在线聊天(新)视频发送"])
 api_router.include_router(chat_new_proxy.router, tags=["在线聊天(新)图片代理"])  # 已定义prefix="/chat-new"
 api_router.include_router(chat_quick_phrase.router, tags=["在线聊天(新)快捷短语"])  # 已定义prefix="/chat-new"
 api_router.include_router(chat_customer_order.router, tags=["在线聊天(新)客户订单"])  # 已定义prefix="/chat-new"

@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from loguru import logger
 
 # 已知的消息内容标识键：命中任一即认为该 dict 是一条消息内容载荷
-_CONTENT_KEYS = ("text", "image", "picUrl", "audio")
+_CONTENT_KEYS = ("text", "image", "picUrl", "audio", "video")
 
 
 def load_content_json(raw: Any) -> Optional[Dict[str, Any]]:
@@ -107,13 +107,14 @@ def interpret_content(decoded: Dict[str, Any]) -> Tuple[str, List[str], str]:
     - contentType==1 且含 text → 文本
     - contentType==2 且含 image → 图片（取 image.pics[].url）
     - contentType==3 且含 audio → 语音（以 "[语音消息]" 文本表示）
+    - contentType==4 或含 video 对象 → 视频（URL/封面由 extract_video_fields 提取）
     - 兜底：含 text → 文本；含 picUrl → 图片（旧格式）
     - 都不匹配 → 返回空类型 ""，由调用方决定降级策略
 
     Args:
         decoded: 已解析的内容 dict
     Returns:
-        (text, images, msg_type)；msg_type ∈ {"text","image",""}
+        (text, images, msg_type)；msg_type ∈ {"text","image","video",""}
     """
     if not isinstance(decoded, dict):
         return ("", [], "")
@@ -128,6 +129,10 @@ def interpret_content(decoded: Dict[str, Any]) -> Tuple[str, List[str], str]:
 
     if content_type == 3 and "audio" in decoded:
         return ("[语音消息]", [], "text")
+
+    if content_type in (4, "4") or isinstance(decoded.get("video"), dict):
+        # 保留三元组接口，视频 URL 不混入图片列表或正文。
+        return ("[视频]", [], "video")
 
     # 兜底：未带标准 contentType 但结构可识别
     if "text" in decoded:

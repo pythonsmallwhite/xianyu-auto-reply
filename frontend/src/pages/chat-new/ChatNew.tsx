@@ -5,7 +5,7 @@
  * 支持多账号切换，基于WebSocket API获取数据
  */
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { Loader2, LogIn, LogOut, MessageCircle, RefreshCw, User, ChevronUp, X, Send, AlertCircle, Ban, ImagePlus } from 'lucide-react'
+import { Loader2, LogIn, LogOut, MessageCircle, RefreshCw, User, ChevronUp, X, Send, AlertCircle, Ban, ImagePlus, Video } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import {
   getChatAccounts,
@@ -15,6 +15,7 @@ import {
   getMessages,
   sendTextMessage,
   sendImageMessage,
+  sendVideoMessage,
   queryUserInfos,
   getAccountProfile,
   getCustomerOrders,
@@ -26,6 +27,7 @@ import {
   getOfficialBlacklistStatus,
   changeOfficialBlacklist,
   proxyCdnImageUrl,
+  proxyCdnVideoUrl,
   type ChatAccount,
   type Conversation,
   type ChatMessage,
@@ -91,6 +93,11 @@ export function ChatNew() {
   const imageInputRef = useRef<HTMLInputElement>(null)
   const [pendingImage, setPendingImage] = useState<{ file: File; previewUrl: string } | null>(null)
   const pendingImageRef = useRef<{ file: File; previewUrl: string } | null>(null)
+  const videoInputRef = useRef<HTMLInputElement>(null)
+  const [pendingVideo, setPendingVideo] = useState<{ file: File; previewUrl: string } | null>(null)
+  const pendingVideoRef = useRef<{ file: File; previewUrl: string } | null>(null)
+  const videoSendingRef = useRef(false)
+  const videoPreviewUrlsRef = useRef(new Set<string>())
 
   // 当前客户订单与快捷短语
   const [customerOrders, setCustomerOrders] = useState<CustomerOrder[]>([])
@@ -1211,7 +1218,82 @@ export function ChatNew() {
     })
   }
 
+  // ==================== 发送视频 ====================
+  const clearPendingVideo = useCallback(() => {
+    const pending = pendingVideoRef.current
+    pendingVideoRef.current = null
+    if (pending) URL.revokeObjectURL(pending.previewUrl)
+    setPendingVideo(null)
+  }, [])
+
+  useEffect(() => {
+    clearPendingVideo()
+  }, [activeAccountId, activeCid, clearPendingVideo])
+
+  useEffect(() => () => {
+    if (pendingVideoRef.current) URL.revokeObjectURL(pendingVideoRef.current.previewUrl)
+    videoPreviewUrlsRef.current.forEach(url => URL.revokeObjectURL(url))
+  }, [])
+
+  const handleVideoSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file || sending || videoSendingRef.current) return
+    if (!file.type.startsWith('video/') || file.size === 0 || file.size > 20 * 1024 * 1024) {
+      addToast({ message: '请选择不超过20MB的非空视频文件', type: 'error' })
+      return
+    }
+    clearPendingVideo()
+    const pending = { file, previewUrl: URL.createObjectURL(file) }
+    pendingVideoRef.current = pending
+    setPendingVideo(pending)
+  }
+
+  const sendVideoFile = async (file: File) => {
+    if (!activeAccountId || !activeCid || sending || videoSendingRef.current) return
+    const conv = conversations.find(c => c.cid === activeCid)
+    if (!conv) {
+      addToast({ message: '未找到当前会话信息', type: 'error' })
+      return
+    }
+    const sendAccountId = activeAccountId
+    const sendCid = activeCid
+    videoSendingRef.current = true
+    setSending(true)
+    clearPendingVideo()
+    const localUrl = URL.createObjectURL(file)
+    videoPreviewUrlsRef.current.add(localUrl)
+    const localMessage: ChatMessage = {
+      messageId: '', senderId: sendAccountId, senderName: '', isSelf: true,
+      type: 'video', text: '', images: [], videoUrl: localUrl, time: Date.now(),
+    }
+    try {
+      const res = await sendVideoMessage(sendAccountId, sendCid, conv.otherUserId, file)
+      if (!res.success) throw new Error(res.message || '视频发送失败')
+      if (!res.data?.messageId || !res.data.videoUrl) {
+        throw new Error('未取得视频发送回执，请刷新会话核对后再操作')
+      }
+      applySentMessage(sendAccountId, sendCid, {
+        ...localMessage, messageId: res.data.messageId, videoUrl: res.data.videoUrl,
+        videoCoverUrl: res.data.videoCoverUrl,
+      }, '[视频]')
+      URL.revokeObjectURL(localUrl)
+      videoPreviewUrlsRef.current.delete(localUrl)
+    } catch (error: any) {
+      const failReason = error?.message || '视频发送结果未知，请刷新会话核对后再操作'
+      applySentMessage(sendAccountId, sendCid, { ...localMessage, failed: true, failReason }, null)
+      addToast({ message: failReason, type: 'error' })
+    } finally {
+      videoSendingRef.current = false
+      setSending(false)
+    }
+  }
+
   const handleSendMessage = async () => {
+    if (pendingVideo) {
+      await sendVideoFile(pendingVideo.file)
+      return
+    }
     if (pendingImage) {
       const file = pendingImage.file
       clearPendingImage()
@@ -1569,8 +1651,8 @@ export function ChatNew() {
                         ) : msg.type === 'video' ? (
                           msg.videoUrl ? (
                             <video
-                              src={proxyCdnImageUrl(msg.videoUrl)}
-                              poster={msg.videoCoverUrl ? proxyCdnImageUrl(msg.videoCoverUrl) : undefined}
+                              src={proxyCdnVideoUrl(msg.videoUrl)}
+                              poster={msg.videoCoverUrl ? proxyCdnVideoUrl(msg.videoCoverUrl) : undefined}
                               controls
                               playsInline
                               preload="metadata"
@@ -1647,7 +1729,29 @@ export function ChatNew() {
                 </button>
               </div>
             )}
+            <input ref={videoInputRef} type="file" accept="video/*" className="hidden" onChange={handleVideoSelected} />
+            {pendingVideo && (
+              <div className="mb-2 flex items-start gap-2 rounded-lg border border-gray-200 dark:border-gray-600 p-2">
+                <video src={pendingVideo.previewUrl} controls playsInline preload="metadata" className="h-24 max-w-40 rounded" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-xs">{pendingVideo.file.name}</div>
+                  <div className="mt-1 text-xs text-gray-400">点击发送按钮后发送视频（最多20MB）</div>
+                </div>
+                <button type="button" onClick={clearPendingVideo} disabled={sending} title="移除待发送视频" className="p-1 text-gray-400">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
             <div className="flex items-end gap-2">
+              <button
+                type="button"
+                onClick={() => videoInputRef.current?.click()}
+                disabled={sending}
+                title="选择视频"
+                className="flex-shrink-0 flex items-center justify-center w-9 h-9 text-gray-500 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
+              >
+                <Video className="w-4 h-4" />
+              </button>
               <button
                 type="button"
                 onClick={handlePickImage}
@@ -1677,7 +1781,7 @@ export function ChatNew() {
               />
               <button
                 onClick={handleSendMessage}
-                disabled={sending || (!inputText.trim() && !pendingImage)}
+                disabled={sending || (!inputText.trim() && !pendingImage && !pendingVideo)}
                 className="flex-shrink-0 flex items-center gap-1 px-4 h-9 text-sm font-medium text-white bg-blue-500 rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {sending ? (

@@ -1279,6 +1279,8 @@ class CookieTokenManager:
 
             new_token = extract_im_access_token(res_json)
             if new_token:
+                from common.utils.xianyu_video import normalize_media_host
+                self.parent.media_host = normalize_media_host(res_json.get("data", {}).get("mediaHost"))
                 self.current_token = new_token
                 self.parent._using_expired_startup_token = False
                 self.last_token_refresh_time = time.time()

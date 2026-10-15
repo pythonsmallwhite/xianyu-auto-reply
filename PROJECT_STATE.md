@@ -1,6 +1,6 @@
 # 项目需求与 AI 交接文档
 
-更新时间：2026-10-15（Asia/Shanghai；main，接手 HEAD 4e92035；R12 视频展示准备及离线验证完成，参考库无视频协议，收发接入阻塞；四个文件随本轮提交，推送结果以最终 Git 回执为准）
+更新时间：2026-10-15（Asia/Shanghai；main，开发基线 a14ccaf；PR #58 视频收发已实现并通过离线验证，16 个文件随本轮提交；真实平台待验收）
 
 > 发给下一位 AI 的统一入口，每轮开发结束必须更新。已收录需求确认稿 v0.5 全文及后续口径；原文中的建议和待定项不等于用户已确认需求。
 
@@ -38,7 +38,7 @@
 | R09 | 跨 AI 保留完整需求及最新进度，每轮更新文档 | 本轮用户要求 | 已实现待验证；本文和 AGENTS.md 已建立 | 原始需求已补齐；下轮开发仍需实际执行维护规则 |
 | R10 | 买家基本信息、主页公开动态、在售商品、评价 | v0.5 第八节 | 已有功能是否覆盖未核实 | 不可获取可留白或提示暂不可用，不阻塞其他流程 |
 | R11 | 历史商品隔离、人工下架范围与确认弹窗 | v0.5 第三节 | 进行中；来源分类和相关 Web 改动已提交 | 默认隐藏；历史商品仅当前账号单件下架；关联商品可选全部或部分账号，确认前不创建任务 |
-| R12 | 聊天视频收发 | issue #297；2026-10-15 用户要求只读参考 xianyu-super-butler，完成解析、Web 播放、上传发送、按钮和 API，build 后提交推送 main | 阻塞（Web 展示准备已实现）；参考库 main/75d1564、已有 origin/beta 和忽略源码均未找到视频解析/上传/发送，只有“视频”系统占位词；已新增 video 类型、URL/封面字段及播放器，npm run build 通过 | 需确认真实参考文件/分支或脱敏协议，才能确定 contentType、载荷字段和上传用途；当前历史/推送解析、send_video_message、chat_new_video.py/注册、sendVideoMessage 和上传按钮尚未实现；既有 Android 视频范围后续单独验收 |
+| R12 | 聊天视频收发 | issue #297；2026-10-15 用户要求四项视频收发功能并 build、提交推送，随后提供 23Star/xianyu-super-butler PR #58 | 已实现待验证（离线已验证）；按 PR 固定提交 4d5eab39 实现 contentType=4、视频/封面及媒体 ID 解析、历史/推送/自动回复接线、xy_chat 上传、IM 回执、新路由与 Web 预览发送；后端 13/13、三组 Node、npm run build、Python 语法与差异检查通过 | 真实平台发送/接收和浏览器播放尚未验收；PR 本身 closed/merged=false，实机验收也未勾选，不能将参考实现等同已验证平台协议；Android 视频后续单独验收 |
 | R13 | 评估并修复聊天实时同步及移动可用性 | 用户要求评估 #304/#339；一期优先级为本轮技术建议 | 进行中；广播集合并发、历史错误伪空列表、切会话旧请求覆盖已修复并离线验证；本轮完成重连补拉（区分首连/重连）、稳定 `messageId` 去重合并、会话列表分页保留、非当前会话缓存更新、迟到发送结果按账号/会话隔离；Android 聊天详情与列表同步实现消息合并、重连补拉、账号标识、贴底滚动与分页入口修正，21 项离线场景通过并逐条变异证伪 | 浏览器/真机内真实重连与后台恢复交错验证、后台恢复缓存刷新穷尽验证、移动窄屏其余页面与 Release APK 真机验收仍未完成 |
 | R14 | Ubuntu 单台云服务器、一键部署 | 用户直接指定 / 本轮协调任务；2026-10-13 用户要求把服务器重装为 Ubuntu 24.04，生成自动安装组件、构建镜像并部署的脚本并推送 | 已实现待验证；`scripts/install-ubuntu.sh` 一键首装（Docker 国内源/镜像加速/日志轮转、swap、源码构建、可导入旧数据），`scripts/deploy-ubuntu.sh update` 更新并在迁移或健康失败时回滚到上次成功版本，`scripts/export-for-migration.sh` 旧服务器导出；脚本合同、函数沙箱和桩 docker 端到端模拟通过 | 干净 Ubuntu 24.04 真机首装/导入/更新/重启实测仍待完成；fork 代码在真实 MySQL 上的迁移与运行尚未验证 |
 | R15 | 评估风控时间/筛选与浏览器替换 | 用户指定 #99/#302 | 已完成代码层评估；#99 一期回归/必要局部修复，#302 二期试验为技术建议 | #99 现有筛选经查询提交，数据库时区和无时区序列化待实测；#302 不按“完美迁移”假设整体替换 |
@@ -49,6 +49,8 @@
 状态统一使用：未开始 / 进行中 / 已实现待验证 / 已验证 / 阻塞。当前为保守交接核对，不是完整产品审计。
 
 ### 本轮已确认口径
+
+- 用户提供 https://github.com/23Star/xianyu-super-butler/pull/58，解除先前参考库缺实现的阻塞。固定 head 为 `4d5eab39ed559bdf4213f137f2e5ddfb1c7fd4c7`，唯一提交为消息中心媒体收发；PR closed 且未合并，因此本地 main 没有此功能。继续原四项需求与提交推送授权，只移植视频相关行为，图片/文本/原代理保持原实现。
 
 - **最新用户要求（2026-10-15）：实现聊天视频收发，参考目录只读，保留既有图片/文本/代理逻辑，新增路由命名 chat_new_video.py；运行 frontend/npm run build，提交并 git push origin main。** 本轮范围为 Web 聊天视频；未授权真实买家消息或服务器部署。参考库未找到协议实现，已询问正确文件/分支，等待答复；不推测 contentType 或把商品素材上传视为已核验的 IM 上传。以下 9 月口径是历史记录，其暂停与禁止推送表述由本次明确指令覆盖。
 
@@ -119,7 +121,17 @@
 
 ## 5. 当前停点与未提交工作
 
-### 最新：2026-10-15 R12 视频协议核对与 Web 展示准备
+### 最新：2026-10-15 R12 按 PR #58 接入视频收发（离线验证完成）
+
+- 接续 `a14ccaf`（上一阶段已推送，接手工作区干净）。参考库始终只读；PR 通过 GitHub API 读取，无 checkout、合并或写入参考项目。
+- 协议：`contentType=4`；`video.url`，兼容 `videoUrl/videoMediaId`；封面 `poster/coverUrl/picMediaId`；`duration`/`durationMs` 为毫秒。`@/$` 媒体 ID 按 PR 的 MessagePack 元数据还原，使用已有纯 Python 解码器；Token mediaHost 缺省 down.im.dingtalk.cn。上传为 stream-upload.goofish.com 的 xy_chat multipart file，未复用商品素材上传用途。
+- 已实现：公共三元组解析保留原接口，新增 extract_video_fields；HTTP 历史、前端实时推送（含缺 reminder 的视频）、自动回复侧统一传出 URL/封面。send_video_message 单次非幂等发送，拒绝/缺回执不假成功；chat_new_video.py 归属/连接/MIME/20MB/空文件校验、临时文件清理，独立 ChatVideoUploader 不改图片压缩流程，复用既有 OpenCV 探测尺寸/时长。Web 文件名与视频预览、明确点发送、失败提示、切账号会话隔离、双击保护、对象 URL 清理。
+- 代理：标准 CDN 视频仍调用原 proxyCdnImageUrl；PR 媒体 ID 使用的 dingtalk 域名走新增 video-proxy，单 Range、流式响应、限定 HTTPS 域名并逐跳检查，不修改原 chat_new_proxy.py 或 proxyCdnImageUrl。
+- 验证：`py -3.13 -B -m unittest tests.test_chat_video tests.test_chat_account_scope -v` 13/13 通过，0 跳过；覆盖历史/推送/自动回复、媒体 ID、发送拒绝、上传失败、临时文件、代理 Range/重定向、账号归属。`node tests/test_chat_video_ui.cjs`、`node tests/test_chat_message_loading.cjs`、`node tests/test_chat_reconnect_repull.cjs` 均通过；`py_compile` 11 个 Python 文件通过；`frontend/npm run build` 退出 0（tsc + Vite，2539 modules），仅原 autoRate 动静态导入提示。部署 nginx 已允许 50m 请求。首次构建因 tsc 缺失失败，补装本地 node_modules 后通过；package.json/package-lock.json 未改。Python 测试使用实际函数与网络/数据库替身，不是完整服务启动或平台实测。
+- 提交边界：本轮视频公共模块、后端路由/IM/推送、WS token/handler 接线、Web API/ChatNew、两份专项测试与本文，共 16 文件随本轮功能提交并按原授权推送；提交前无其他未提交工作，不提交依赖或 dist。推送成功以最终 Git 回执为准。
+- 下一步：用户部署当前源码后，用限定测试账号验收视频历史/实时接收、封面、选文件预览发送及闲鱼 App 接收播放。沿用 PR 的 20MB 限制；发送不额外生成封面，接收端展示协议提供的封面或视频首帧。Token 从旧缓存启动时 mediaHost 使用默认域名，取得新 Token 后使用返回值。真实视频/账号/服务器尚未操作。
+
+### 历史：2026-10-15 R12 视频协议核对与 Web 展示准备
 
 - 当前停点：只读参考 `D:/Myproject/xianyu-super-butler`，HEAD `75d156412ea305da05ce4b950f831885671b9642`。`app/xianyu_im.py:_interpret_content` 只处理 text/image/audio；`XianyuAutoAsync.py` 和 `app/reply_server.py` 只有文本、图片发送/上传。main、已有 origin/beta、忽略源码与本地提交检索均没有视频协议实现，参考目录保持干净。
 - 已实现：`frontend/src/api/chatNew.ts` 新增 video 类型及可选 videoUrl/videoCoverUrl；`ChatNew.tsx` 新增带 controls/playsInline/metadata 的 video 和 poster，二者复用原 proxyCdnImageUrl，缺 URL 显示 [视频]；推送摘要 [视频]，无 ID 占位仅同 videoUrl 去重。现有图片、文本和代理实现保留。
@@ -292,7 +304,7 @@
 
 ## 6. 验证记录
 
-最新（2026-10-15）：`npm run build` 在 frontend 退出 0；根目录 `node tests/test_chat_message_loading.cjs`（含三项视频合并用例）、`node tests/test_chat_reconnect_repull.cjs` 退出 0，`git diff --check` 通过。当前仅验证前端展示准备，完整视频收发仍缺协议。后端、真实平台和播放验收未运行。
+最新（2026-10-15 PR #58 接入）：后端视频/聊天归属 13/13、视频交互/聊天加载/重连三组 Node、frontend 的 `npm run build`、11 个 Python 文件 `py_compile` 及 `git diff --check` 全部通过。真实平台与浏览器播放未验收。此前展示准备的验证记录为上一阶段证据。
 
 最新验证（2026-09-30，新会话继续接管）：Python 下架/HTTP 专项 52/52（34.950 秒，0 失败/0 跳过，TEMP 隔离依赖）、双端下架 UI 68/68（真实网络调用 0）、移动聊天回执专项、Android 完整类型检查及暂存 diff 检查通过。上一 Orca 会话的 Python 141/141（112.831 秒）、六组 Node、双端类型检查作为历史证据保留。
 
@@ -339,7 +351,7 @@
 
 ## 7. 下一步（按依赖顺序）
 
-2026-10-15 本轮优先：确认 R12 真实参考实现位置，完成视频收发剩余三项；下方 Orca 下一步为历史安排，本轮未恢复旧 worker。
+2026-10-15 本轮停点：R12 四项代码和离线验证已完成，按用户要求提交推送；后续由限定测试账号进行真实视频收发/播放验收。下方 Orca 下一步为历史安排，本轮未恢复旧 worker。
 
 **最新停点：e2e2953 共同基线已提交，Run run_f7192cc83c24 的三个独立工作树 worker 执行中；下一步处理收件箱、审查验证并集成 main。unknown 人工核对、HTTP 合同、双端交互不重复实现；详情见第 5 节。**
 
@@ -378,6 +390,11 @@
 ```
 
 ## 9. 交接历史
+
+### 2026-10-15：用户补充 PR #58，继续完成视频收发
+
+- PR #58 的固定 head 4d5eab39 提供此前缺失的视频实现；closed/未合并解释了本地检索结果。上一阶段 a14ccaf 已推送。
+- 本轮已接通四项代码范围，保持原图片/文本/代理逻辑；后端离线 13/13、三组 Node、前端构建、Python 语法和差异检查通过，16 文件随本轮提交推送。真实闲鱼收发未验收，完整停点见第 5 节。
 
 ### 2026-10-15：R12 参考库核对与视频展示准备
 

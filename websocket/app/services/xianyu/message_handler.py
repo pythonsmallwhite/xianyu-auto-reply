@@ -16,6 +16,7 @@ from loguru import logger
 from .utils import safe_str
 from common.utils.xianyu_utils import decrypt
 from common.utils.xianyu_message_parser import decode_first_content, interpret_content
+from common.utils.xianyu_video import extract_video_fields
 
 
 class MessageHandler:
@@ -151,6 +152,14 @@ class MessageHandler:
     def is_chat_message(self, message: dict) -> bool:
         """判断是否为用户聊天消息"""
         try:
+            # 部分视频没有 reminderContent，按载荷识别后仍走聊天分发。
+            inner = message.get("1", {}) if isinstance(message, dict) else {}
+            envelope = inner.get("6", {}) if isinstance(inner, dict) else {}
+            block = envelope.get("3", {}) if isinstance(envelope, dict) else {}
+            if isinstance(block, dict):
+                decoded = decode_first_content([block.get("5", ""), block.get("1", "")])
+                if decoded and interpret_content(decoded)[2] == "video":
+                    return True
             return (
                 isinstance(message, dict)
                 and "1" in message
@@ -317,6 +326,20 @@ class MessageHandler:
             # 提取商品ID
             item_id = self._extract_item_id(message)
 
+            # 视频同样可能没有 reminderContent；统一从实际载荷提取，保留原图片/文本处理。
+            video_fields = {}
+            video_envelope = message_1.get("6", {})
+            video_block = video_envelope.get("3", {}) if isinstance(video_envelope, dict) else {}
+            if isinstance(video_block, dict):
+                decoded_video = decode_first_content([video_block.get("5", ""), video_block.get("1", "")])
+                if decoded_video and interpret_content(decoded_video)[2] == "video":
+                    video_fields = extract_video_fields(decoded_video, getattr(self, "media_host", None))
+                    video_fields["type"] = "video"
+                    reminder_content = video_fields["videoUrl"] or "[视频]"
+                    if isinstance(message_10, dict) and message_10.get("senderUserId"):
+                        send_user_id = message_10["senderUserId"]
+                        send_user_name = message_10.get("senderNick") or message_10.get("reminderTitle") or send_user_name
+
             return {
                 "send_user_id": send_user_id,
                 "send_user_name": send_user_name,
@@ -325,6 +348,7 @@ class MessageHandler:
                 "item_id": item_id,
                 "msg_time": msg_time,
                 "raw_message": message,
+                **video_fields,
             }
             
         except Exception as e:

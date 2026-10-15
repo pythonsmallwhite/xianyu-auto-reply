@@ -44,6 +44,7 @@ from common.services.token_request_lock import (
     token_request_lock,
 )
 from common.utils.time_utils import get_beijing_now_naive
+from common.utils.xianyu_video import DEFAULT_MEDIA_HOST, make_video_content, normalize_media_host
 from common.utils.xianyu_utils import (
     generate_device_id,
     generate_mid,
@@ -115,6 +116,7 @@ class GoofishImClient:
         self._last_token_cache_lookup_succeeded = True
         self.device_id: str = generate_device_id(self.myid)
         self.token: str = ""
+        self.media_host = DEFAULT_MEDIA_HOST
         self._captcha_token_cache_saved = False
 
         # WebSocket相关
@@ -496,6 +498,45 @@ class GoofishImClient:
                 message_id = raw_message_id
         return {"response": response, "messageId": message_id, "uuid": message_uuid}
 
+    async def send_video_message(
+        self, cid: str, to_user_id: str, video_url: str,
+        width: int = 0, height: int = 0, duration_ms: int = 0, cover_url: str = "",
+    ) -> Dict[str, Any]:
+        """发送 PR #58 定义的 contentType=4 视频；非幂等请求不自动重发。"""
+        full_cid = cid if "@goofish" in cid else f"{cid}@goofish"
+        full_to = to_user_id if "@goofish" in to_user_id else f"{to_user_id}@goofish"
+        payload = make_video_content(video_url, width, height, duration_ms, cover_url)
+        data_b64 = base64.b64encode(json.dumps(payload, ensure_ascii=False).encode("utf-8")).decode("utf-8")
+        mid = generate_mid()
+        message_uuid = generate_uuid()
+        msg = {
+            "lwp": "/r/MessageSend/sendByReceiverScope",
+            "headers": {"mid": mid},
+            "body": [
+                {
+                    "uuid": message_uuid, "cid": full_cid, "conversationType": 1,
+                    "content": {"contentType": 101, "custom": {"type": 1, "data": data_b64}},
+                    "redPointPolicy": 0, "extension": {"extJson": "{}"},
+                    "ctx": {"appVersion": "1.0", "platform": "web"},
+                    "mtags": {}, "msgReadStatusSetting": 1,
+                },
+                {"actualReceivers": [full_to, f"{self.myid}@goofish"]},
+            ],
+        }
+        response = await self._send_and_wait_with_retry(lambda: (mid, msg), retry_after_reconnect=False)
+        self._raise_if_send_rejected(response)
+        if response.get("code") != 200:
+            raise RuntimeError("闲鱼未确认视频发送结果，请刷新会话核对后再操作")
+        body = response.get("body", {})
+        message_id = ""
+        if isinstance(body, dict):
+            message_id = body.get("messageId") or body.get("msgId") or body.get("1") or ""
+            if isinstance(message_id, dict):
+                message_id = message_id.get("messageId") or message_id.get("1") or ""
+        if not isinstance(message_id, str) or not message_id:
+            raise RuntimeError("闲鱼未返回视频消息ID，请刷新会话核对后再操作")
+        return {"response": response, "messageId": message_id, "uuid": message_uuid}
+
     async def recall_message(self, message_id: str) -> Dict[str, Any]:
         """通过闲鱼官方 IM 协议撤回一条消息"""
         mid = generate_mid()
@@ -772,6 +813,8 @@ class GoofishImClient:
                 )
 
             access_token = extract_im_access_token(result) or ""
+            if access_token:
+                self.media_host = normalize_media_host(result.get("data", {}).get("mediaHost"))
             if not access_token:
                 logger.error(
                     f"【{self.account_id}】Token响应异常: "
@@ -1189,6 +1232,8 @@ class GoofishImClient:
             if not hasattr(self, "_push_parser"):
                 from .push_message_parser import PushMessageParser
                 self._push_parser = PushMessageParser(self.account_id, self.myid)
+
+            self._push_parser.media_host = self.media_host
 
             for sync_data in data_list:
                 if not isinstance(sync_data, dict) or "data" not in sync_data:

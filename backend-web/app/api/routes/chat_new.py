@@ -34,6 +34,7 @@ from common.schemas.common import ApiResponse
 from common.utils.auth_scope import is_admin_user
 from common.utils.xianyu_utils import trans_cookies
 from common.utils.xianyu_message_parser import load_content_json, interpret_content
+from common.utils.xianyu_video import extract_video_fields
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -407,7 +408,7 @@ async def get_messages(
         messages = []
         models = body.get("userMessageModels", [])
         for model in models:
-            msg_info = _parse_message(model, client.myid)
+            msg_info = _parse_message(model, client.myid, getattr(client, "media_host", None))
             if msg_info:
                 messages.append(msg_info)
         messages.reverse()
@@ -745,7 +746,7 @@ def _parse_conversation(conv: dict, myid: str) -> dict | None:
         return None
 
 
-def _parse_message(model: dict, myid: str) -> dict | None:
+def _parse_message(model: dict, myid: str, media_host: str | None = None) -> dict | None:
     """
     解析单条消息
 
@@ -787,6 +788,7 @@ def _parse_message(model: dict, myid: str) -> dict | None:
         msg_type = "text"
         msg_text = ""
         msg_images = []
+        video_fields = {}
 
         if custom_data:
             # 文本/图片/语音等通用内容解析统一走公共模块（HTTP 历史消息载荷为 base64）；
@@ -796,6 +798,8 @@ def _parse_message(model: dict, myid: str) -> dict | None:
             decoded = load_content_json(custom_data)
             if decoded is not None:
                 msg_text, msg_images, msg_type = interpret_content(decoded)
+                if msg_type == "video":
+                    video_fields = extract_video_fields(decoded, media_host)
                 if msg_type == "image" and not msg_images:
                     # 图片但未取到 URL，占位提示
                     msg_text = "[图片]"
@@ -831,6 +835,7 @@ def _parse_message(model: dict, myid: str) -> dict | None:
             "type": msg_type,
             "text": msg_text,
             "images": msg_images,
+            **video_fields,
             "time": msg_time,
         }
     except Exception as e:
@@ -860,6 +865,8 @@ def _extract_message_summary(message: dict) -> str:
                 decoded = json.loads(
                     base64.b64decode(custom_data).decode("utf-8")
                 )
+                if decoded.get("contentType") in (4, "4") or isinstance(decoded.get("video"), dict):
+                    return "[视频]"
                 if "text" in decoded:
                     text_obj = decoded["text"]
                     # text 可能是 dict（如 {"text": "实际内容"}）或字符串

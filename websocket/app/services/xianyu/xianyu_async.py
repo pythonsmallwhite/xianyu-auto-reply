@@ -757,6 +757,7 @@ class XianyuAsync:
                 self.message_handler.set_card_update_message_handler(on_card_update_message)
             
             # 处理消息
+            self.message_handler.media_host = getattr(self, "media_host", None)
             await self.message_handler.handle_message(message_data, websocket)
             
         except Exception as e:

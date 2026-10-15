@@ -16,13 +16,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
 
 from common.utils.xianyu_utils import decrypt
-from common.utils.xianyu_message_parser import parse_content_payloads
+from common.utils.xianyu_message_parser import parse_content_payloads, decode_first_content
+from common.utils.xianyu_video import extract_video_fields
 
 
 class PushMessageParser:
     """推送消息解析器，负责解密和解析 IM 主动推送的消息"""
 
-    def __init__(self, account_id: str, myid: str):
+    def __init__(self, account_id: str, myid: str, media_host: str | None = None):
         """
         初始化解析器
 
@@ -32,6 +33,7 @@ class PushMessageParser:
         """
         self.account_id = account_id
         self.myid = myid
+        self.media_host = media_host
 
     def decrypt_push_data(self, data: str) -> Optional[dict]:
         """
@@ -107,6 +109,7 @@ class PushMessageParser:
 
             # 解析 base64 内容
             text_content, images, msg_type = self._decode_content(msg_1)
+            video_fields = self._decode_video(msg_1) if msg_type == "video" else {}
             if not text_content and not images:
                 text_content = reminder
                 msg_type = "text"
@@ -136,6 +139,7 @@ class PushMessageParser:
                     "type": msg_type,
                     "text": text_content,
                     "images": images,
+                    **video_fields,
                     "time": msg_time,
                 },
             }
@@ -147,6 +151,14 @@ class PushMessageParser:
         """解析卡片类型聊天推送消息"""
         try:
             msg_6_3 = msg_6.get("3", {})
+            video_fields = self._decode_video(msg_1)
+            if video_fields:
+                sender = msg_1.get("1", {})
+                return self._parse_standard_chat(msg_1, {
+                    "senderUserId": sender.get("1", "") if isinstance(sender, dict) else "",
+                    **(msg_1.get("10") if isinstance(msg_1.get("10"), dict) else {}),
+                    "reminderContent": "[视频]",
+                })
             text_content = msg_6_3.get("2", "[卡片消息]")
             cid_raw = str(msg_1.get("2", ""))
             cid = cid_raw.split("@")[0] if "@" in cid_raw else cid_raw
@@ -216,6 +228,16 @@ class PushMessageParser:
         except Exception as e:
             logger.warning(f"【{self.account_id}】解析卡片更新推送失败: {e}")
             return None
+
+    def _decode_video(self, msg_1: dict) -> dict:
+        msg_6 = msg_1.get("6", {})
+        block = msg_6.get("3", {}) if isinstance(msg_6, dict) else {}
+        if not isinstance(block, dict):
+            return {}
+        decoded = decode_first_content([block.get("5", ""), block.get("1", "")])
+        if decoded and (decoded.get("contentType") in (4, "4") or isinstance(decoded.get("video"), dict)):
+            return extract_video_fields(decoded, self.media_host)
+        return {}
 
     def _decode_content(self, msg_1: dict) -> Tuple[str, List[str], str]:
         """
