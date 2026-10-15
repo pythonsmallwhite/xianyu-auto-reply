@@ -62,9 +62,11 @@ export interface ChatMessage {
   senderId: string
   senderName: string
   isSelf: boolean
-  type: 'text' | 'image' | 'system' | 'card'
+  type: 'text' | 'image' | 'video' | 'system' | 'card'
   text: string
   images: string[]
+  videoUrl?: string
+  videoCoverUrl?: string
   time: number
   /** 发送是否失败（仅本地发送的消息可能为 true） */
   failed?: boolean

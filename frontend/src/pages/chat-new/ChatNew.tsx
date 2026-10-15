@@ -252,6 +252,7 @@ export function ChatNew() {
       && candidate.isSelf === other.isSelf
       && candidate.type === other.type
       && candidate.text === other.text
+      && (candidate.type !== 'video' || candidate.videoUrl === other.videoUrl)
       && Math.abs(candidate.time - other.time) < 5000
 
     const accepted: ChatMessage[] = []
@@ -325,7 +326,7 @@ export function ChatNew() {
   }
 
   const handleWsNewMessage = useCallback((accountId: string, cid: string, msg: ChatMessage) => {
-    const summary = msg.type === 'image' ? '[图片]' : (msg.text || '').slice(0, 50)
+    const summary = msg.type === 'video' ? '[视频]' : msg.type === 'image' ? '[图片]' : (msg.text || '').slice(0, 50)
     const isActiveAccount = accountId === activeAccountIdRef.current
 
     if (isActiveAccount) {
@@ -1565,6 +1566,20 @@ export function ChatNew() {
                               />
                             ))}
                           </div>
+                        ) : msg.type === 'video' ? (
+                          msg.videoUrl ? (
+                            <video
+                              src={proxyCdnImageUrl(msg.videoUrl)}
+                              poster={msg.videoCoverUrl ? proxyCdnImageUrl(msg.videoCoverUrl) : undefined}
+                              controls
+                              playsInline
+                              preload="metadata"
+                              aria-label="视频消息"
+                              className="max-w-full max-h-72 rounded"
+                            />
+                          ) : (
+                            <span className="whitespace-pre-wrap">{msg.text || '[视频]'}</span>
+                          )
                         ) : (
                           <span className="whitespace-pre-wrap">{msg.text}</span>
                         )}

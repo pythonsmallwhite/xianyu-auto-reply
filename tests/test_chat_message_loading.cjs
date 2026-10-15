@@ -70,6 +70,13 @@ const apply = (prev, response) => {
   const a1 = {messageId: 'a1', isSelf: true, type: 'text', text: 'ok', time: 3000};
   const a2 = {messageId: 'a2', isSelf: true, type: 'text', text: 'ok', time: 3100};
   assert.deepEqual(merge([a1], [a2], 'append'), [a1, a2], '不同 id 的同文本消息必须都保留');
+  // 视频占位文本相同，不能把短时间内的不同视频合并成一条。
+  const video1 = {messageId: '', isSelf: true, type: 'video', text: '', videoUrl: 'blob:video-one', time: 3000};
+  const video2 = {...video1, videoUrl: 'blob:video-two', time: 3100};
+  assert.deepEqual(merge([video1], [video2], 'append'), [video1, video2], '不同视频 URL 必须各自保留');
+  assert.deepEqual(merge([video1], [{...video1}], 'append'), [video1], '同一视频占位仍应去重');
+  const serverVideo = {...video1, messageId: 'video-id'};
+  assert.deepEqual(merge([serverVideo], [{...serverVideo}], 'replace'), [serverVideo], '视频历史和推送按稳定 ID 去重');
   // 历史分页前置且去重
   const hist = {messageId: 'h1', isSelf: false, type: 'text', text: 'old', time: 500};
   const overlap = {messageId: 'm1', isSelf: false, type: 'text', text: 'hi', time: 1000};
