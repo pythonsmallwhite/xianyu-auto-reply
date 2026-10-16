@@ -12,7 +12,9 @@ import { motion } from 'framer-motion'
 import { Layers, CheckCircle, XCircle, Clock, Play, Loader2, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
-import { publishBatch, getBatchStatus, getPublishBatches, getPublishBatchTargets, retryPublishBatch, getMaterials, type ProductMaterial, type BatchAccountStatus, type BatchStatusData, type PublishBatchTarget, type PublishWindowHours } from '@/api/productPublish'
+import { publishBatch, getBatchStatus, getPublishBatches, getPublishBatchTargets, retryPublishBatch, getMaterials, type ProductMaterial, type BatchAccountStatus, type BatchStatusData, type PublishBatchTarget, type PublishWindowHours, type PublishAddressMode } from '@/api/productPublish'
+import { formatPublishTime, publishWindowLabel } from './batchPublishPresentation'
+import { BatchTaskTable } from './BatchTaskTable'
 import { getAccountDetails, updateAccountPublishCapacity, getAccountPublishReservations, resolveAccountPublishReservation, type PublishCapacityReservation } from '@/api/accounts'
 
 type BatchProgress = BatchStatusData
@@ -53,6 +55,7 @@ function BatchPublishContent({ userId }: { userId: number }) {
   const [selectedAccounts, setSelectedAccounts] = useState<Set<string>>(new Set())
   const [selectedMaterials, setSelectedMaterials] = useState<Set<number>>(new Set())
   const [windowHours, setWindowHours] = useState<PublishWindowHours | null>(null)
+  const [addressMode, setAddressMode] = useState<PublishAddressMode>('material')
   const [retryWindowHours, setRetryWindowHours] = useState<PublishWindowHours | null>(null)
   const [loadingAccounts, setLoadingAccounts] = useState(true)
   const [loadingMaterials, setLoadingMaterials] = useState(true)
@@ -61,6 +64,9 @@ function BatchPublishContent({ userId }: { userId: number }) {
   const [history, setHistory] = useState<BatchProgress[]>([])
   const [historyPage, setHistoryPage] = useState(1)
   const [historyTotal, setHistoryTotal] = useState(0)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [displaySource, setDisplaySource] = useState<'current' | 'history'>('current')
   const [targets, setTargets] = useState<PublishBatchTarget[]>([])
   const [targetPage, setTargetPage] = useState(1)
   const [targetTotal, setTargetTotal] = useState(0)
@@ -68,9 +74,12 @@ function BatchPublishContent({ userId }: { userId: number }) {
   const [selectedFailedTargets, setSelectedFailedTargets] = useState<Set<number>>(new Set())
   const [retrying, setRetrying] = useState(false)
   const [activeBatchId, setActiveBatchId] = useState<string | null>(null)
+  const [currentBatchId, setCurrentBatchId] = useState<string | null>(null)
+  const [pendingBatchId, setPendingBatchId] = useState<string | null>(null)
   const [statusLoading, setStatusLoading] = useState(false)
   const [statusError, setStatusError] = useState('')
   const [targetError, setTargetError] = useState('')
+  const [targetLoading, setTargetLoading] = useState(false)
   const [historyError, setHistoryError] = useState('')
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const activeBatchRef = useRef<string | null>(null)
@@ -79,6 +88,8 @@ function BatchPublishContent({ userId }: { userId: number }) {
   const historyRequestRef = useRef(0)
   const targetPageRef = useRef(1)
   const historyPageRef = useRef(1)
+  const historyOpenRef = useRef(false)
+  const targetLoadingRef = useRef(false)
   const [materialSearch, setMaterialSearch] = useState('')
   const accountNameMap = new Map(accounts.map((account: any) => [account.id, account.note || account.id]))
 
@@ -101,12 +112,17 @@ function BatchPublishContent({ userId }: { userId: number }) {
   }
 
   /** 清除 sessionStorage 中的 batch_id */
-  const clearStoredBatchId = useCallback(() => {
-    try { sessionStorage.removeItem(storageKey) } catch { /* ignore */ }
+  const clearStoredBatchId = useCallback((batchId: string) => {
+    setPendingBatchId(previous => previous === batchId ? null : previous)
+    try {
+      if (sessionStorage.getItem(storageKey) === batchId) sessionStorage.removeItem(storageKey)
+    } catch { /* ignore */ }
   }, [storageKey])
 
   /** 保存 batch_id 到 sessionStorage */
   const storeBatchId = useCallback((batchId: string) => {
+    setCurrentBatchId(batchId)
+    setPendingBatchId(batchId)
     try { sessionStorage.setItem(storageKey, batchId) } catch { /* ignore */ }
   }, [storageKey])
 
@@ -124,42 +140,61 @@ function BatchPublishContent({ userId }: { userId: number }) {
     setTargetError('')
   }, [])
 
-  const loadTargets = useCallback(async (batchId: string, page = targetPageRef.current, generation = batchGenerationRef.current) => {
+  const loadTargets = useCallback(async (batchId: string, page = targetPageRef.current, generation = batchGenerationRef.current, background = false) => {
+    // A poll must not supersede an explicit page request.
+    if (background && targetLoadingRef.current) return
     const requestId = ++targetRequestRef.current
     const isCurrent = () => activeBatchRef.current === batchId && generation === batchGenerationRef.current && requestId === targetRequestRef.current
-    if (page !== targetPageRef.current) setTargets([])
+    if (page !== targetPageRef.current) {
+      setTargets([])
+      setSelectedFailedTargets(new Set())
+      setExpandedTargets(new Set())
+    }
     targetPageRef.current = page
     setTargetPage(page)
     setTargetError('')
+    targetLoadingRef.current = true
+    setTargetLoading(true)
     try {
       const res = await getPublishBatchTargets(batchId, page, 20)
       if (!isCurrent()) return
       if (!res.success || !res.data) throw new Error(res.message || '详情加载失败')
       setTargets(res.data.list)
+      setSelectedFailedTargets(previous => new Set([...previous].filter(id => res.data!.list.some(target => target.id === id && target.status === 'failed'))))
       setTargetPage(res.data.page)
       setTargetTotal(res.data.total)
       targetPageRef.current = res.data.page
     } catch (error) {
       if (isCurrent()) setTargetError(error instanceof Error ? error.message : '详情加载失败')
+    } finally {
+      if (isCurrent()) {
+        targetLoadingRef.current = false
+        setTargetLoading(false)
+      }
     }
   }, [])
 
   const loadHistory = useCallback(async (page = historyPageRef.current) => {
+    if (!historyOpenRef.current) return
     const requestId = ++historyRequestRef.current
     if (page !== historyPageRef.current) setHistory([])
     historyPageRef.current = page
     setHistoryPage(page)
     setHistoryError('')
+    setHistoryLoading(true)
     try {
-      const res = await getPublishBatches(page, 10)
-      if (requestId !== historyRequestRef.current) return
+      const res = await getPublishBatches(page, 5)
+      if (!historyOpenRef.current || requestId !== historyRequestRef.current) return
       if (!res.success || !res.data) throw new Error(res.message || '历史任务加载失败')
       setHistory(res.data.list)
       setHistoryPage(res.data.page)
       setHistoryTotal(res.data.total)
       historyPageRef.current = res.data.page
+      return res.data.list
     } catch (error) {
       if (requestId === historyRequestRef.current) setHistoryError(error instanceof Error ? error.message : '历史任务加载失败')
+    } finally {
+      if (requestId === historyRequestRef.current) setHistoryLoading(false)
     }
   }, [])
 
@@ -167,7 +202,8 @@ function BatchPublishContent({ userId }: { userId: number }) {
     stopPolling()
     const generation = ++batchGenerationRef.current
     ++targetRequestRef.current
-    ++historyRequestRef.current
+    targetLoadingRef.current = false
+    setTargetLoading(false)
     if (activeBatchRef.current !== batchId) {
       clearBatchDetails()
       targetPageRef.current = 1
@@ -182,9 +218,9 @@ function BatchPublishContent({ userId }: { userId: number }) {
     return generation
   }, [stopPolling, clearBatchDetails])
 
-  const startPolling = useCallback((batchId: string) => {
+  const startPolling = useCallback((batchId: string, persist = false) => {
     const generation = beginBatchRequest(batchId)
-    storeBatchId(batchId)
+    if (persist) storeBatchId(batchId)
     setStatusLoading(true)
     let inFlight = false
     let wasRunning = false
@@ -197,11 +233,11 @@ function BatchPublishContent({ userId }: { userId: number }) {
         if (!res.success || !res.data) throw new Error('状态查询失败')
         setProgress(res.data)
         setStatusError('')
-        void loadTargets(batchId, targetPageRef.current, generation)
-        void loadHistory()
+        void loadTargets(batchId, targetPageRef.current, generation, true)
+        setHistory(previous => previous.map(batch => batch.batch_id === batchId ? res.data : batch))
         if (!res.data.snapshot_available || res.data.finished) {
           stopPolling()
-          if (res.data.snapshot_available) clearStoredBatchId()
+          if (res.data.snapshot_available) clearStoredBatchId(batchId)
           if (res.data.finished) {
             if (wasRunning) {
               const state = getBatchState(res.data)
@@ -229,11 +265,9 @@ function BatchPublishContent({ userId }: { userId: number }) {
         if (generation === batchGenerationRef.current) setStatusLoading(false)
       }
     }
-    void loadTargets(batchId, targetPageRef.current, generation)
-    void loadHistory()
     pollingRef.current = setInterval(() => { void poll() }, 3000)
     void poll()
-  }, [addToast, beginBatchRequest, clearStoredBatchId, loadHistory, loadTargets, stopPolling, storeBatchId])
+  }, [addToast, beginBatchRequest, clearStoredBatchId, loadTargets, stopPolling, storeBatchId])
 
   useEffect(() => {
     let disposed = false
@@ -248,10 +282,9 @@ function BatchPublishContent({ userId }: { userId: number }) {
       })
       .catch(() => { if (!disposed) addToast({ type: 'error', message: '素材加载失败，请刷新页面重试' }) })
       .finally(() => { if (!disposed) setLoadingMaterials(false) })
-    void loadHistory()
     try {
       const savedBatchId = sessionStorage.getItem(storageKey)
-      if (savedBatchId) startPolling(savedBatchId)
+      if (savedBatchId) startPolling(savedBatchId, true)
     } catch { /* 浏览器可能禁用存储 */ }
 
     return () => {
@@ -261,7 +294,11 @@ function BatchPublishContent({ userId }: { userId: number }) {
       ++targetRequestRef.current
       ++historyRequestRef.current
     }
-  }, [addToast, startPolling, loadHistory, stopPolling])
+  }, [addToast, startPolling, stopPolling, storageKey])
+
+  useEffect(() => {
+    if (selectedAccounts.size !== 1 && windowHours === 0) setWindowHours(null)
+  }, [selectedAccounts.size, windowHours])
 
   const saveCapacity = async (accountId: string) => {
     const raw = capacityDraft[accountId]
@@ -338,15 +375,23 @@ function BatchPublishContent({ userId }: { userId: number }) {
 
   /** 提交批量发布任务 */
   const handleSubmit = async () => {
+    if (submitting || retrying || statusLoading || statusError || pendingBatchId || (activeBatchId && (!progress?.finished || !progress.snapshot_available))) return
     if (selectedAccounts.size === 0) { addToast({ type: 'warning', message: '请至少选择一个账号' }); return }
     if (selectedMaterials.size === 0) { addToast({ type: 'warning', message: '请至少选择一条素材' }); return }
     if (windowHours === null) { addToast({ type: 'warning', message: '请选择发布窗口' }); return }
+    if (windowHours === 0 && selectedAccounts.size !== 1) { addToast({ type: 'warning', message: '立即发布仅支持一个账号，请重新选择窗口' }); return }
+    const missingAddress = materials.filter(material => selectedMaterials.has(material.id) && !material.address?.trim())
+    if (addressMode === 'material' && missingAddress.length > 0) {
+      addToast({ type: 'warning', message: `请先补充素材所在地：${missingAddress.map(material => material.title).join('、')}；或明确选择随机地址` })
+      return
+    }
     setSubmitting(true)
     try {
       const res = await publishBatch({
         account_ids: Array.from(selectedAccounts),
         material_ids: Array.from(selectedMaterials),
         window_hours: windowHours,
+        address_mode: addressMode,
       })
       if (res.success) {
         addToast({ type: 'success', message: res.message || '批量发布任务已提交' })
@@ -355,9 +400,11 @@ function BatchPublishContent({ userId }: { userId: number }) {
         const accountCount = selectedAccounts.size
         const materialCountPerAccount = accountCount > 0 ? Math.floor(totalCount / accountCount) : 0
         if (batchId) {
-          startPolling(batchId)
+          setDisplaySource('current')
+          startPolling(batchId, true)
           setProgress({
             batch_id: batchId,
+            address_mode: addressMode,
             window_hours: windowHours,
             window_started_at: null,
             deadline_at: null,
@@ -422,8 +469,13 @@ function BatchPublishContent({ userId }: { userId: number }) {
   })
 
   const retrySelected = async () => {
-    if (!progress?.finished || statusError || statusLoading || retrying || selectedFailedTargets.size === 0) return
-    if (retryWindowHours === null) {
+    if (pendingBatchId && pendingBatchId !== activeBatchId) return
+    if (!progress?.finished || !progress.snapshot_available || statusError || statusLoading || targetError || targetLoading || retrying || selectedFailedTargets.size === 0) return
+    if ([...selectedFailedTargets].some(id => !targets.some(target => target.id === id && target.status === 'failed'))) {
+      addToast({ type: 'warning', message: '所选失败项目已变化，请刷新详情后重新选择' })
+      return
+    }
+    if (retryWindowHours === null || !PUBLISH_WINDOWS.includes(retryWindowHours)) {
       addToast({ type: 'warning', message: '请选择重试窗口' })
       return
     }
@@ -440,7 +492,7 @@ function BatchPublishContent({ userId }: { userId: number }) {
       if (!response.success) throw new Error(response.message || '重试未能确认，请刷新状态后核对')
       setProgress(previous => previous && { ...previous, finished: false, status: 'pending' })
       addToast({ type: 'success', message: response.message || '失败项目已重新排队' })
-      startPolling(batchId)
+      startPolling(batchId, true)
     } catch {
       if (generation === batchGenerationRef.current) {
         setStatusError('重试结果暂时无法确认，已保留任务信息，请刷新状态后核对，勿重复重试。')
@@ -453,20 +505,54 @@ function BatchPublishContent({ userId }: { userId: number }) {
   }
 
   const selectHistoryBatch = (batch: BatchProgress) => {
-    if (batch.snapshot_available && !batch.finished) {
-      startPolling(batch.batch_id)
-    } else {
-      beginBatchRequest(batch.batch_id)
-      if (batch.finished && batch.snapshot_available) clearStoredBatchId()
-      else storeBatchId(batch.batch_id)
-      void loadTargets(batch.batch_id)
-      void loadHistory()
-    }
+    setDisplaySource('history')
+    startPolling(batch.batch_id)
     setProgress(batch)
   }
 
+  const showHistoryPage = async (page: number) => {
+    const generation = batchGenerationRef.current
+    const list = await loadHistory(page)
+    // Explicit selection or closing the panel wins over an older list response.
+    if (list?.length && historyOpenRef.current && generation === batchGenerationRef.current) selectHistoryBatch(list[0])
+    if (list?.length === 0 && displaySource === 'history' && generation === batchGenerationRef.current) {
+      stopPolling()
+      ++batchGenerationRef.current
+      ++targetRequestRef.current
+      activeBatchRef.current = null
+      setActiveBatchId(null)
+      setProgress(null)
+      clearBatchDetails()
+      setStatusError('')
+      setStatusLoading(false)
+      targetLoadingRef.current = false
+      setTargetLoading(false)
+    }
+  }
+
+  const showCurrentBatch = () => {
+    if (!currentBatchId) return
+    setDisplaySource('current')
+    startPolling(currentBatchId)
+  }
+
+  const toggleHistory = () => {
+    const open = !historyOpenRef.current
+    historyOpenRef.current = open
+    setHistoryOpen(open)
+    if (open) {
+      void showHistoryPage(1)
+    } else {
+      ++historyRequestRef.current
+      setHistoryLoading(false)
+      if (displaySource === 'history' && currentBatchId) showCurrentBatch()
+    }
+  }
+
   const total = selectedAccounts.size * selectedMaterials.size
-  const isDisabled = submitting || retrying || statusLoading || total === 0 || windowHours === null || !!statusError || (activeBatchId !== null && (!progress || !progress.finished))
+  const missingAddressMaterials = materials.filter(material => selectedMaterials.has(material.id) && !material.address?.trim())
+  const showProgress = displaySource === 'current' || historyOpen
+  const isDisabled = submitting || retrying || statusLoading || total === 0 || windowHours === null || (windowHours === 0 && selectedAccounts.size !== 1) || (addressMode === 'material' && missingAddressMaterials.length > 0) || !!statusError || pendingBatchId !== null || (activeBatchId !== null && (!progress || !progress.finished || !progress.snapshot_available))
 
   return (
     <div className="space-y-3 sm:space-y-4">
@@ -476,7 +562,7 @@ function BatchPublishContent({ userId }: { userId: number }) {
           <h1 className="page-title">批量发布</h1>
           <p className="page-description">多账号、多素材后台发布，进度和尝试记录可追踪</p>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            批量发布时会忽略素材库中填写的宝贝所在地，统一从随机地址库自动分配地址。
+            默认使用素材所在地；也可明确选择从地址库随机分配。
           </p>
         </div>
         <div className="text-sm text-slate-500 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-lg">
@@ -508,7 +594,7 @@ function BatchPublishContent({ userId }: { userId: number }) {
                     <div key={a.id} className={`p-2.5 rounded-lg ${checked ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
                       <label className="flex items-center gap-3 cursor-pointer">
                         <input type="checkbox" className="w-4 h-4 text-blue-600 rounded accent-blue-500"
-                          checked={checked} onChange={() => toggleAccount(a.id)} />
+                          aria-label={`选择账号 ${a.id}`} checked={checked} onChange={() => toggleAccount(a.id)} />
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium truncate text-slate-800 dark:text-slate-100">{a.note || a.id}</p>
                           {a.note && <p className="text-xs text-slate-400 truncate">{a.id}</p>}
@@ -582,7 +668,7 @@ function BatchPublishContent({ userId }: { userId: number }) {
                   return (
                     <label key={m.id} className={`flex items-center gap-3 p-2.5 rounded-lg cursor-pointer transition-colors ${checked ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
                       <input type="checkbox" className="w-4 h-4 text-blue-600 rounded accent-blue-500"
-                        checked={checked} onChange={() => toggleMaterial(m.id)} />
+                        aria-label={`选择素材 ${m.title}`} checked={checked} onChange={() => toggleMaterial(m.id)} />
                       {m.images?.[0] ? (
                         <img src={m.images[0]} alt={m.title} className="w-10 h-10 object-cover rounded-lg flex-shrink-0" />
                       ) : (
@@ -592,6 +678,7 @@ function BatchPublishContent({ userId }: { userId: number }) {
                         <p className="text-sm font-medium truncate text-slate-800 dark:text-slate-100">{m.title}</p>
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
                           <span className="text-xs text-amber-600">{m.price}</span>
+                          {!m.address?.trim() && <span className="text-xs text-amber-600">未填写素材所在地</span>}
                           {isMultiSpec ? (
                             <span className="badge-info flex-shrink-0">多规格 · {specificationCount}类 / {skuCount}组合</span>
                           ) : (
@@ -609,14 +696,32 @@ function BatchPublishContent({ userId }: { userId: number }) {
       </div>
 
       <div className="vben-card">
+        <div className="vben-card-header"><h2 className="vben-card-title">地址方式</h2></div>
+        <div className="vben-card-body space-y-2">
+          <label className="flex items-center gap-2 text-sm">
+            <input type="radio" name="batch-address-mode" value="material" checked={addressMode === 'material'} onChange={() => setAddressMode('material')} />
+            使用素材所在地（不随机）
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="radio" name="batch-address-mode" value="random" checked={addressMode === 'random'} onChange={() => setAddressMode('random')} />
+            随机地址（优先个人地址库，为空时使用全局地址库）
+          </label>
+          {addressMode === 'material' && missingAddressMaterials.length > 0 && <p role="alert" className="text-sm text-amber-600">
+            以下素材缺少所在地，请先到素材库补充，或明确选择随机地址：{missingAddressMaterials.map(material => material.title).join('、')}
+          </p>}
+        </div>
+      </div>
+
+      <div className="vben-card">
         <div className="vben-card-header"><h2 className="vben-card-title">发布窗口</h2></div>
         <div className="vben-card-body">
-          <p className="text-xs text-slate-500 mb-2">必须选择窗口，提交时不会预选默认值。</p>
+          <p className="text-xs text-slate-500 mb-2">必须选择窗口，不预选默认值。立即发布仅限恰好选择一个账号；切换为多账号后需重新选择窗口。</p>
           <div className="flex flex-wrap gap-2">
-            {PUBLISH_WINDOWS.map(hours => (
+            {([0, ...PUBLISH_WINDOWS] as PublishWindowHours[]).map(hours => (
               <button type="button" key={hours} onClick={() => setWindowHours(hours)}
-                className={`px-3 py-2 rounded-lg border text-sm ${windowHours === hours ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-300 text-slate-600'}`}>
-                {hours} 小时
+                aria-pressed={windowHours === hours} disabled={hours === 0 && selectedAccounts.size !== 1}
+                className={`px-3 py-2 rounded-lg border text-sm disabled:opacity-40 ${windowHours === hours ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-300 text-slate-600'}`}>
+                {publishWindowLabel(hours)}
               </button>
             ))}
           </div>
@@ -633,32 +738,43 @@ function BatchPublishContent({ userId }: { userId: number }) {
 
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="vben-card">
         <div className="vben-card-header">
-          <h2 className="vben-card-title">历史批量任务</h2>
-          <button type="button" className="text-sm text-blue-600" aria-label="刷新历史批量任务" onClick={() => void loadHistory()}>刷新</button>
+          <button type="button" className="vben-card-title" aria-expanded={historyOpen} aria-controls="publish-history" onClick={toggleHistory}>
+            {historyOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}历史发布
+          </button>
+          {historyOpen && <button type="button" className="text-sm text-blue-600" aria-label="刷新历史批量任务" onClick={() => void showHistoryPage(historyPage)}>刷新</button>}
         </div>
-        <div className="vben-card-body space-y-2">
+        {historyOpen && <div id="publish-history" className="vben-card-body space-y-2">
+          <p className="text-xs text-slate-500">每页 5 次，按最近创建排序；展开时默认选择最近一次。</p>
+          {historyLoading && <p role="status" className="text-sm text-slate-500">正在加载历史发布...</p>}
           {historyError && <p role="alert" className="text-sm text-amber-600">{historyError}</p>}
-          {history.length === 0 ? <p className="text-sm text-slate-400">暂无任务记录可展示</p> : history.map(batch => (
+          {!historyLoading && !historyError && history.length === 0 && <p className="text-sm text-slate-400">暂无历史发布记录</p>}
+          {history.map(batch => (
             <button type="button" key={batch.batch_id} aria-label={`查看批次 ${batch.batch_id}，${getBatchState(batch).label}`} onClick={() => selectHistoryBatch(batch)}
+              aria-pressed={progress?.batch_id === batch.batch_id && displaySource === 'history'}
               className={`w-full text-left rounded-lg border p-3 ${progress?.batch_id === batch.batch_id ? 'border-blue-400 bg-blue-50 dark:bg-blue-900/20' : 'border-slate-200 dark:border-slate-700'}`}>
               <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-medium">{batch.batch_id.slice(0, 8)}...</span>
+                <span className="text-sm font-medium">{formatPublishTime(batch.created_at)} · {batch.batch_id.slice(0, 8)}...</span>
                 <span className={getBatchState(batch).className}>{getBatchState(batch).label}</span>
               </div>
               <div className="text-xs text-slate-500 mt-1">总数 {batch.total} · 成功 {batch.success} · 失败 {batch.failed} · 超时 {batch.timed_out} · 未知 {batch.unknown} · 跳过 {batch.skipped}</div>
             </button>
           ))}
-          {historyTotal > 10 && (
+          {historyTotal > 5 && (
             <div className="flex justify-end gap-2 text-xs">
-              <button type="button" aria-label="历史任务上一页" disabled={historyPage <= 1} onClick={() => void loadHistory(historyPage - 1)}>上一页</button>
-              <span>{historyPage}</span>
-              <button type="button" aria-label="历史任务下一页" disabled={historyPage * 10 >= historyTotal} onClick={() => void loadHistory(historyPage + 1)}>下一页</button>
+              <button type="button" aria-label="历史任务上一页" disabled={historyPage <= 1} onClick={() => void showHistoryPage(historyPage - 1)}>上一页</button>
+              <span>第 {historyPage} / {Math.ceil(historyTotal / 5)} 页</span>
+              <button type="button" aria-label="历史任务下一页" disabled={historyPage * 5 >= historyTotal} onClick={() => void showHistoryPage(historyPage + 1)}>下一页</button>
             </div>
           )}
-        </div>
+        </div>}
       </motion.div>
 
-      {activeBatchId && (
+      {currentBatchId && displaySource === 'history' && <div className="flex items-center gap-2 text-sm">
+        {pendingBatchId && <span className="text-amber-600">当前发布任务仍需核对，查看历史不会解除发布保护。</span>}
+        <button type="button" className="text-blue-600" onClick={showCurrentBatch}>返回当前发布进度</button>
+      </div>}
+
+      {showProgress && activeBatchId && (
         <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
           <span className="break-all">当前批次：{activeBatchId}</span>
           <button type="button" className="text-blue-600" disabled={retrying} onClick={() => startPolling(activeBatchId)}>刷新状态</button>
@@ -668,10 +784,10 @@ function BatchPublishContent({ userId }: { userId: number }) {
       )}
 
       {/* 进度面板 */}
-      {progress && (
+      {showProgress && progress && (
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="vben-card">
           <div className="vben-card-header">
-            <h2 className="vben-card-title"><Layers className="w-4 h-4" />发布进度</h2>
+            <h2 className="vben-card-title"><Layers className="w-4 h-4" />{displaySource === 'current' ? '当前发布进度' : '所选批次任务'}</h2>
             {!progress.snapshot_available
               ? <span className="badge-warning">状态不完整</span>
               : progress.finished
@@ -679,7 +795,7 @@ function BatchPublishContent({ userId }: { userId: number }) {
                 : <Loader2 className="w-4 h-4 animate-spin text-blue-500" />}
           </div>
           <div className="vben-card-body">
-            <div className="text-xs text-slate-500 mb-3">窗口：{progress.window_hours ? `${progress.window_hours} 小时` : '—'} · 开始：{progress.window_started_at || '—'} · 截止：{progress.deadline_at || '—'} · 超时：{progress.timed_out}</div>
+            <div className="text-xs text-slate-500 mb-3">窗口：{publishWindowLabel(progress.window_hours)} · 开始：{formatPublishTime(progress.window_started_at)} · 截止：{formatPublishTime(progress.deadline_at)} · 超时：{progress.timed_out} · 地址：{progress.address_mode === 'material' ? '素材所在地' : progress.address_mode === 'random' ? '随机地址' : '历史记录未提供'}</div>
             {progress.timed_out > 0 && <p className="text-xs text-amber-600 mb-3">存在超时项目；即使平台后来明确成功，也保留超时原因，不将批次伪装为全部按时成功。</p>}
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
               {[
@@ -713,7 +829,7 @@ function BatchPublishContent({ userId }: { userId: number }) {
             )}
             {!progress.snapshot_available && <p className="text-xs text-amber-600 mt-2">仅恢复了已写入的发布日志，无法确认是否还有未执行项；请先对账。</p>}
             {progress.snapshot_available && !progress.finished && !statusError && !retrying && <p className="text-xs text-slate-400 mt-2">每 3 秒自动刷新进度</p>}
-            {progress.finished && progress.failed > 0 && (
+            {progress.snapshot_available && progress.finished && progress.failed > 0 && (
               <div className="mt-4 border-t border-slate-200 dark:border-slate-700 pt-4 flex items-center justify-between gap-2">
                 <h3 className="text-sm font-semibold">失败项目（仅失败项可重试）</h3>
                 <div className="flex items-center gap-2">
@@ -722,7 +838,7 @@ function BatchPublishContent({ userId }: { userId: number }) {
                     {PUBLISH_WINDOWS.map(hours => <option key={hours} value={hours}>{hours} 小时</option>)}
                   </select>
                   <button type="button" className="btn-ios-primary text-xs py-1.5 px-3 disabled:opacity-50"
-                  disabled={retrying || statusLoading || !!statusError || !!targetError || retryWindowHours === null || selectedFailedTargets.size === 0} onClick={() => void retrySelected()}>
+                  disabled={retrying || statusLoading || targetLoading || !!statusError || !!targetError || (!!pendingBatchId && pendingBatchId !== activeBatchId) || retryWindowHours === null || selectedFailedTargets.size === 0} onClick={() => void retrySelected()}>
                     <RefreshCw className="w-3 h-3" />{retrying ? '排队中...' : `重试选中 (${selectedFailedTargets.size})`}
                   </button>
                 </div>
@@ -734,105 +850,33 @@ function BatchPublishContent({ userId }: { userId: number }) {
                 <button type="button" className="ml-2 text-blue-600" onClick={() => void loadTargets(progress.batch_id)}>刷新详情</button>
               </div>
             )}
-            <div className="mt-3 space-y-1">
-              {targets.map(target => (
-                <div key={target.id} className="rounded-lg border border-slate-200 dark:border-slate-700 p-2 text-xs">
-                  <div className="flex items-center gap-2">
-                    <button type="button" aria-label={`${expandedTargets.has(target.id) ? '收起' : '展开'} ${target.account_id} · ${target.title} 的尝试记录`}
-                      aria-expanded={expandedTargets.has(target.id)} aria-controls={`target-attempts-${target.id}`}
-                      onClick={() => setExpandedTargets(previous => {
-                        const next = new Set(previous)
-                        next.has(target.id) ? next.delete(target.id) : next.add(target.id)
-                        return next
-                      })}>
-                      {expandedTargets.has(target.id) ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                    </button>
-                    {target.status === 'failed' && progress.finished ? (
-                      <input type="checkbox" aria-label={`选择重试 ${target.account_id} · ${target.title}`}
-                        disabled={retrying || statusLoading || !!statusError} checked={selectedFailedTargets.has(target.id)} onChange={() => toggleTarget(target.id)} />
-                    ) : <span className="w-3" />}
-                    <span className="truncate flex-1">{target.account_id} · {target.title}</span>
-                    <span className="text-slate-500">{target.status}</span>
-                  </div>
-                  <div className="mt-1 text-slate-500">计划：{target.scheduled_at || '—'} · 可执行：{target.available_at || '—'} · 截止：{target.deadline_at || '—'}</div>
-                  <div className="text-slate-500">请求发起：{target.request_started_at || '—'} · 最小间隔：{target.minimum_gap_seconds} 秒</div>
-                  {target.schedule_error && <p className="text-amber-600 break-all">超时/排程原因：{target.schedule_error}</p>}
-                  {target.error_message && <p className="ml-5 mt-1 text-amber-600 break-all">{target.error_message}</p>}
-                  <div id={`target-attempts-${target.id}`} hidden={!expandedTargets.has(target.id)} className="ml-5 mt-2 space-y-2 text-slate-500 break-all">
-                    {target.attempts.length === 0 && <p>暂无尝试记录</p>}
-                    {target.attempts.map(attempt => (
-                      <div key={attempt.id}>
-                        <p>尝试 #{attempt.attempt_no} · {attempt.status} · {attempt.error_message || '无错误信息'}</p>
-                        <p>日志 ID：{attempt.publish_log_id ?? '—'} · 平台商品 ID：{attempt.item_id || '—'}</p>
-                        <p>开始时间：{attempt.started_at || '—'} · 结束时间：{attempt.finished_at || '—'}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
+            {targetLoading && <p role="status" className="mt-3 text-xs text-slate-500">正在加载任务明细...</p>}
+            {!targetLoading && !targetError && targets.length === 0 && <p className="mt-3 text-sm text-slate-400">此批次暂无任务明细</p>}
+            {targets.length > 0 && <BatchTaskTable targets={targets} accountNames={accountNameMap} expanded={expandedTargets} selected={selectedFailedTargets}
+              canRetry={progress.snapshot_available && progress.finished} busy={retrying || statusLoading || targetLoading || !!statusError || !!targetError}
+              onToggle={toggleTarget} onExpand={id => setExpandedTargets(previous => {
+                const next = new Set(previous)
+                next.has(id) ? next.delete(id) : next.add(id)
+                return next
+              })} />}
             {targetTotal > 20 && (
               <div className="flex justify-end gap-2 text-xs mt-2">
-                <button type="button" aria-label="任务详情上一页" disabled={targetPage <= 1} onClick={() => void loadTargets(progress.batch_id, targetPage - 1)}>上一页</button>
-                <span>{targetPage}</span>
-                <button type="button" aria-label="任务详情下一页" disabled={targetPage * 20 >= targetTotal} onClick={() => void loadTargets(progress.batch_id, targetPage + 1)}>下一页</button>
+                <button type="button" aria-label="任务详情上一页" disabled={targetPage <= 1 || retrying} onClick={() => void loadTargets(progress.batch_id, targetPage - 1)}>上一页</button>
+                <span>第 {targetPage} / {Math.ceil(targetTotal / 20)} 页</span>
+                <button type="button" aria-label="任务详情下一页" disabled={targetPage * 20 >= targetTotal || retrying} onClick={() => void loadTargets(progress.batch_id, targetPage + 1)}>下一页</button>
               </div>
             )}
-            {progress.account_statuses.length > 0 && (
-              <div className="mt-4 border-t border-slate-200 dark:border-slate-700 pt-4">
-                <div className="flex items-center justify-between gap-2 mb-3">
-                  <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200">账号自动获取商品状态</h3>
-                  <span className="text-xs text-slate-400">按账号展示最近一次发布后商品同步结果</span>
-                </div>
-                <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                  {progress.account_statuses.map(accountStatus => (
-                    <div key={accountStatus.account_id} className="rounded-xl border border-slate-200 dark:border-slate-700 p-3 bg-slate-50/80 dark:bg-slate-800/60">
-                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="text-sm font-medium text-slate-800 dark:text-slate-100 truncate">
-                            {accountNameMap.get(accountStatus.account_id) || accountStatus.account_id}
-                          </div>
-                          <div className="text-xs text-slate-400 truncate">账号ID：{accountStatus.account_id}</div>
-                        </div>
-                        <span className={getSyncStatusClassName(accountStatus.sync_status)}>{getSyncStatusLabel(accountStatus.sync_status)}</span>
-                      </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mt-3 text-xs">
-                        <div className="rounded-lg bg-white dark:bg-slate-900 px-2.5 py-2">
-                          <div className="text-slate-400">发布总数</div>
-                          <div className="mt-1 font-semibold text-slate-700 dark:text-slate-100">{accountStatus.total}</div>
-                        </div>
-                        <div className="rounded-lg bg-white dark:bg-slate-900 px-2.5 py-2">
-                          <div className="text-slate-400">发布成功</div>
-                          <div className="mt-1 font-semibold text-emerald-600">{accountStatus.success}</div>
-                        </div>
-                        <div className="rounded-lg bg-white dark:bg-slate-900 px-2.5 py-2">
-                          <div className="text-slate-400">发布失败</div>
-                          <div className="mt-1 font-semibold text-amber-600">{accountStatus.failed}</div>
-                        </div>
-                        <div className="rounded-lg bg-white dark:bg-slate-900 px-2.5 py-2">
-                          <div className="text-slate-400">结果未知</div>
-                          <div className="mt-1 font-semibold text-amber-600">{accountStatus.unknown}</div>
-                        </div>
-                        <div className="rounded-lg bg-white dark:bg-slate-900 px-2.5 py-2">
-                          <div className="text-slate-400">跳过</div>
-                          <div className="mt-1 font-semibold text-slate-600">{accountStatus.skipped}</div>
-                        </div>
-                        <div className="rounded-lg bg-white dark:bg-slate-900 px-2.5 py-2">
-                          <div className="text-slate-400">待处理</div>
-                          <div className="mt-1 font-semibold text-blue-600">{accountStatus.publishing + accountStatus.pending}</div>
-                        </div>
-                      </div>
-                      <div className="mt-3 text-xs text-slate-500 dark:text-slate-300 break-all">{accountStatus.sync_message}</div>
-                      {(accountStatus.sync_status === 'success' || accountStatus.sync_total_count > 0 || accountStatus.sync_saved_count > 0) && (
-                        <div className="mt-2 text-xs text-slate-500 dark:text-slate-300">
-                          已抓取 {accountStatus.sync_total_count} 件，入库 {accountStatus.sync_saved_count} 件
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            {progress.account_statuses.length > 0 && <details className="mt-4 border-t border-slate-200 dark:border-slate-700 pt-3 text-xs">
+              <summary className="cursor-pointer text-slate-500">发布后商品同步（{progress.account_statuses.length} 个账号，{progress.account_statuses.filter(account => account.sync_status === 'failed' || account.sync_status === 'unknown').length} 个异常）</summary>
+              <ul className="mt-2 space-y-2">
+                {progress.account_statuses.map(account => <li key={account.account_id} className="flex flex-wrap gap-2">
+                  <span>{accountNameMap.get(account.account_id) || account.account_id}</span>
+                  <span className={getSyncStatusClassName(account.sync_status)}>{getSyncStatusLabel(account.sync_status)}</span>
+                  <span>{account.sync_message}</span>
+                  {account.sync_status === 'success' && <span>获取 {account.sync_total_count} 件 / 保存 {account.sync_saved_count} 件</span>}
+                </li>)}
+              </ul>
+            </details>}
           </div>
         </motion.div>
       )}

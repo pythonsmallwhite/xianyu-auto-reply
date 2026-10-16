@@ -130,6 +130,7 @@ class SellerItemInfoManager:
     @staticmethod
     def _map_item(raw: dict) -> dict:
         """把卖家平台商品字段映射为与个人版一致的结构（供 save_fetched_items 复用）。"""
+        from common.utils.catalog_media import extract_catalog_media
         item_id = str(raw.get("itemId") or "")
         price = str(raw.get("reservePrice") or "")
         image_url = str(raw.get("itemImageUrl") or "")
@@ -156,6 +157,7 @@ class SellerItemInfoManager:
             "gmt_shelf": raw.get("gmtShelf", ""),
             "item_type": raw.get("itemType", ""),
             "image_url": image_url,
+            **extract_catalog_media(raw),
             "fan_price": raw.get("fanPrice", {}),
             "item_extend_list": raw.get("itemExtendList", []),
             "item_operation_info": raw.get("itemOperationInfo", {}),

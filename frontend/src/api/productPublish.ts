@@ -241,10 +241,12 @@ export interface BatchAccountStatus {
   sync_saved_count: number
 }
 
-export type PublishWindowHours = 1 | 3 | 5 | 12 | 24
+export type PublishWindowHours = 0 | 1 | 3 | 5 | 12 | 24
+export type PublishAddressMode = 'material' | 'random'
 
 export interface BatchStatusData {
   batch_id: string
+  address_mode?: PublishAddressMode | null
   window_hours: number | null
   window_started_at: string | null
   deadline_at: string | null
@@ -457,6 +459,7 @@ export const publishBatch = (params: {
   account_ids: string[]
   material_ids: number[]
   window_hours: PublishWindowHours
+  address_mode: PublishAddressMode
 }): Promise<PublishBatchResponse> => post(`${PREFIX}/publish/batch`, params)
 
 /** 查询批量发布任务状态 */

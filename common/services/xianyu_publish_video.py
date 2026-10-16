@@ -161,7 +161,10 @@ async def _upload_video_cover(content: bytes, name: str, cookie: str) -> str:
         )
     except PublishMediaError as exc:
         raise PublishVideoError(f"视频封面上传失败：{exc}") from exc
-    return _text(cover_item.get("url"))
+    cover_url = _text(cover_item.get("url"))
+    if not cover_url.lower().startswith(("http://", "https://")):
+        raise PublishVideoError("视频封面上传未返回有效图片地址")
+    return cover_url
 
 
 def _strategy_model(response: dict[str, Any]) -> dict[str, Any]:
@@ -463,9 +466,10 @@ def _video_payload(
     uploaded_cover_url: str | None = None,
 ) -> dict[str, Any]:
     """构造 idleitem.publish 所需的视频对象。"""
-    poster = _text(video.get("thumbnail_url") or video.get("cover_url") or uploaded_cover_url)
+    # Local material thumbnails must not override the uploaded platform cover.
+    poster = _text(uploaded_cover_url)
     if not poster.lower().startswith(("http://", "https://")):
-        poster = oss_url
+        raise PublishVideoError("视频缺少已上传的平台封面，不能用视频地址代替图片")
     return {
         "heightSize": height,
         "widthSize": width,
@@ -489,8 +493,10 @@ async def upload_publish_videos(
 ) -> tuple[list[dict[str, Any]], str]:
     """按顺序上传视频，返回视频发布对象和刷新后的 Cookie。"""
     payloads: list[dict[str, Any]] = []
+    if len(videos) > 3:
+        raise PublishVideoError("最多支持 3 个视频，请明确移除多余视频后重试")
     current_cookie = cookie
-    for index, video in enumerate(videos[:3], 1):
+    for index, video in enumerate(videos, 1):
         if not isinstance(video, dict):
             raise PublishVideoError(f"第 {index} 个视频格式不正确")
         payload, current_cookie = await upload_publish_video(

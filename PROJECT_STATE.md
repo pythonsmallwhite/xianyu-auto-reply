@@ -123,6 +123,24 @@
 
 ## 5. 当前停点与未提交工作
 
+### 最新：2026-10-16 Web 发布与列表体验 R24-R29（已实现，离线验证通过）
+
+- 本轮来源：用户在手机端完成后提出六项 Web 需求，并明确继续开发；worker 指定 gpt-6-astra / xhigh / Approve for me，此最新模型要求覆盖历史 gpt-6.1-sol。主协调实际上下文为 approvals_reviewer=auto_review。
+- 核对基线：main / f7c1e1ca18dff2b4e4747f72572df22c5d776123；上轮手机端 R18-R23 已提交并推送该 SHA，本段覆盖下文旧的待提交停点。
+- R24（已实现待真实验证）：修复含视频商品封面载荷错误及发布前媒体异常误记unknown；普通卖家不再静默丢视频，明确提示当前通道不支持。基线缺陷复现和视频离线回归通过；用户实际线上错误未取得，不能确认唯一生产根因。
+- R25（已实现待真实验证）：新批次默认使用素材所在地，缺地址明确提示；批量发布的地址方式选择使用素材所在地（不随机）即可关闭随机分配，random显式走个人/全局地址库。策略持久化，旧NULL队列继续旧随机规则，不暗改已排程任务。
+- R26（已验证：离线组件与浏览器DOM）：点击历史发布才展开，最近5批且默认选最新；目标表格展示账号/商品/状态/进度/预计和真实成功时间，记录可展开，账号同步收起展示；切批次与分页竞态有回归。
+- R27（已实现待真实验证）：发布窗口增加立即发布，仅恰好一账号可选，多选清除非法选择；后端再校验。立即排队保留lease/幂等/跨批间隔/unknown保护；24小时为执行有效期而非随机延迟。
+- R28（已实现待真实媒体验证）：默认关闭48px小图，图片取第一张，视频优先封面/首图，缺图懒加载首帧并限并发2个，失败占位和关闭清理；统一item_images/item_video_url/item_video_cover及两种同步来源，兼容detail字符串/对象。
+- R29（已验证：离线组件与浏览器DOM）：商品名称和买家昵称主行、ID副行；240px/180px截断及title全文已实测。列标题商品/买家，独立昵称可选默认隐藏，保留旧显式列设置，缺名称诚实占位。
+- 开发计划：三个独立 Orca 工作树分别负责后端发布、批量发布 Web、商品与订单 Web；主协调冻结接口、审查差异、组合回归、集成 main 和按既有明确仓库授权提交推送。无真实平台发布、买家消息或生产部署。
+- 当前停点：Run run_e7398475657a 三个worker均worker_done succeeded且已release（外部终端retained/none，工作树保留），无reclaimable任务。后端e2f7dd1、批量Web d9c6cd8、商品订单c3901bb已审查并按文件集成main；三者GPT-6-Astra xhigh及实际auto_review均已核验。主分支功能和本段交接准备随本轮提交，再按既有明确授权推送origin/main并核对远端SHA。
+- 冻结接口：创建/重试 window_hours=0 表示立即，仅单账号允许，不能产生零秒过期窗口；创建 address_mode=material|random，默认 material，缺地址明确报错，旧持久任务无策略继续旧规则；批次历史 page_size=5，时间使用真实目标/尝试字段。
+- 最终组合验证：main执行Python 101/101，0失败0跳过（87.786秒，含媒体8、批次/执行器/视频/参数/guard/容量/排程93）；Node批量28项+4个内存变异反例、商品订单14组在main复跑通过；frontend/npm run build完整tsc+Vite通过（2542 modules，既有autoRate动静态导入提示保留）；git diff --check通过。
+- R24代码证据：视频载荷原先让本地thumbnail_url/cover_url优先于已上传封面，且无有效封面时用视频URL冒充图片；worker已修复并增加明确上传失败状态。用户具体线上错误尚未提供，已异步询问，不把代码缺陷当作已证实的唯一生产根因；现有600秒执行超时未改。
+- 验证环境：隔离依赖outputs/r24-test-deps（含greenlet）和虚拟API预览outputs/r24-review均未跟踪且不提交，不修改全局Python。浏览器DOM验证历史默认收起/5批/选最新/任务列/实际时间及订单截断通过；Orca页面visibility=hidden导致截图空白与IntersectionObserver不触发，完整视觉及真实视频首帧解码未计通过。MySQL真实迁移、多进程及平台发布未执行。
+- 提交边界：仅本轮功能、测试、三份worker报告及本段交接；既有scripts/build-android-apk.sh、tests/test_android_build.sh、xianyu-mobile/README.md及本文旧OOM/移动阶段未提交差异保留，不夹带依赖、补丁或dist。下一步确认main提交推送回执；用户更新部署后在限定对象验证视频与迁移。
+
 ### 最新：2026-10-15 R07 Android APK Ubuntu 构建脚本（已实现待服务器验证）
 
 - 接手 main / `7c592c97f5745afa34d0a7b6e273441fee4c71b0`，最终提交 `202d7dfc8b1fe2341d642d93af1ec95056917586` 已推送 origin/main，工作区干净。本轮沿用 project-handoff 与 Windows 操作规范，无并行 worker。

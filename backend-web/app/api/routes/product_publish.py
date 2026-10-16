@@ -214,12 +214,19 @@ class BatchPublishRequest(BaseModel):
     """批量发布请求"""
     account_ids: List[str] = Field(..., min_length=1, description="账号ID列表")
     material_ids: List[int] = Field(..., min_length=1, description="素材ID列表")
-    window_hours: Literal[1, 3, 5, 12, 24] = Field(..., description="显式选择发布窗口（小时）")
+    window_hours: Literal[0, 1, 3, 5, 12, 24] = Field(..., description="发布窗口（小时），0 表示单账号立即执行")
+    address_mode: Literal["material", "random"] = "material"
+
+    @model_validator(mode="after")
+    def validate_immediate_account(self) -> "BatchPublishRequest":
+        if self.window_hours == 0 and len(set(self.account_ids)) != 1:
+            raise ValueError("立即发布仅支持一个账号")
+        return self
 
 
 class BatchRetryRequest(BaseModel):
     target_ids: List[int] = Field(..., min_length=1, max_length=1000)
-    window_hours: Literal[1, 3, 5, 12, 24] = Field(..., description="显式选择新的重试窗口（小时）")
+    window_hours: Literal[0, 1, 3, 5, 12, 24] = Field(..., description="重试窗口（小时），0 仅允许单账号的失败目标")
 
 
 class CategoryRecommendRequest(BaseModel):
@@ -506,6 +513,7 @@ async def publish_batch(
             materials=materials,
             batch_id=batch_id,
             window_hours=req.window_hours,
+            address_mode=req.address_mode,
         )
     except ValueError as exc:
         await session.rollback()
@@ -518,6 +526,7 @@ async def publish_batch(
             "batch_id": batch_id,
             "total": batch.total_count,
             "window_hours": batch.window_hours,
+            "address_mode": batch.address_mode or "random",
             "window_started_at": safe_isoformat(batch.window_started_at),
             "deadline_at": safe_isoformat(batch.deadline_at),
             "timed_out": 0,

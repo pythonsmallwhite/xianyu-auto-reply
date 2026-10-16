@@ -25,6 +25,7 @@ from common.db.redis_client import distributed_lock
 from common.models.xy_account import XYAccount
 from common.models.xy_catalog_item import XYCatalogItem
 from common.utils.item_origin import origin_predicates, origin_name
+from common.utils.catalog_media import extract_catalog_media
 from common.models.default_reply import DefaultReply
 
 
@@ -1135,7 +1136,7 @@ class ItemService:
         metadata = item.metadata_json or {}
         # 从 detail(整块商品JSON) 解析鱼小铺特有字段供界面展示；普通账号无此字段时返回空
         detail_raw = metadata.get("detail")
-        detail_obj: dict = {}
+        detail_obj: dict = detail_raw if isinstance(detail_raw, dict) else {}
         if isinstance(detail_raw, str) and detail_raw:
             try:
                 parsed = json.loads(detail_raw)
@@ -1151,6 +1152,7 @@ class ItemService:
             "item_title": item.title,
             "item_description": metadata.get("description"),
             "item_detail": detail_raw,
+            **extract_catalog_media(detail_obj, metadata),
             "item_category": metadata.get("category"),
             "item_price": item.price,
             # 鱼小铺特有：库存、上架时间、商品状态（普通账号为空，前端显示 -）

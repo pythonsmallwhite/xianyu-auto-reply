@@ -26,10 +26,10 @@ const defaultColumns: ColumnConfig[] = [
   { key: 'cookie_id', label: '账号ID', visible: true, fixed: true },
   { key: 'order_id', label: '订单ID', visible: true, fixed: true },
   { key: 'receiver', label: '收货人', visible: false },
-  { key: 'item_id', label: '商品ID', visible: true, fixed: true },
+  { key: 'item_id', label: '商品', visible: true, fixed: true },
   { key: 'sku_info', label: '规格', visible: true, fixed: true },
-  { key: 'buyer_id', label: '买家ID', visible: true, fixed: true },
-  { key: 'buyer_fish_nick', label: '买家昵称', visible: true, fixed: true },
+  { key: 'buyer_id', label: '买家', visible: true, fixed: true },
+  { key: 'buyer_fish_nick', label: '买家昵称', visible: false },
   { key: 'chat_id', label: '会话ID', visible: false },
   { key: 'quantity', label: '数量', visible: true, fixed: true },
   { key: 'amount', label: '金额', visible: true, fixed: true },
@@ -112,7 +112,13 @@ export function Orders() {
         localStorage.removeItem('order-columns-config')
         return defaultColumns
       }
-      return parsed
+      // Preserve saved visibility/order while refreshing these presentation labels.
+      return parsed.map(col => {
+        if (col.key === 'item_id') return { ...col, label: '商品' }
+        if (col.key === 'buyer_id') return { ...col, label: '买家' }
+        if (col.key === 'buyer_fish_nick') return { ...col, fixed: false }
+        return col
+      })
     }
     return defaultColumns
   })
@@ -620,22 +626,39 @@ export function Orders() {
                           case 'item_id':
                             return (
                               <td key={col.key} className="whitespace-nowrap text-sm text-slate-700 dark:text-slate-200">
-                                <div className="group relative cursor-pointer">
-                                  <span>{order.item_id}</span>
-                                  {order.item_title && (
-                                    <div className="absolute left-0 top-full mt-1 z-50 hidden group-hover:block bg-gray-800 text-white text-xs rounded-lg px-3 py-2 max-w-xs whitespace-normal shadow-lg">
-                                      {order.item_title}
-                                    </div>
-                                  )}
+                                <div className="max-w-[240px]">
+                                  <div className="truncate font-medium" title={order.item_title?.trim() || '商品名称暂不可用'}>
+                                    {order.item_title?.trim() || '商品名称暂不可用'}
+                                  </div>
+                                  <div className="truncate text-xs text-slate-500 dark:text-slate-400" title={order.item_id || ''}>
+                                    {order.item_id || '-'}
+                                  </div>
                                 </div>
                               </td>
                             )
                           case 'sku_info':
                             return <td key={col.key} className="whitespace-nowrap text-sm text-slate-500 dark:text-slate-400 max-w-[180px] truncate" title={order.sku_info || ''}>{order.sku_info || '-'}</td>
                           case 'buyer_id':
-                            return <td key={col.key} className="whitespace-nowrap text-sm text-slate-700 dark:text-slate-200">{order.buyer_id}</td>
+                            return (
+                              <td key={col.key} className="whitespace-nowrap text-sm text-slate-700 dark:text-slate-200">
+                                <div className="max-w-[180px]">
+                                  <div className="truncate font-medium" title={order.buyer_fish_nick?.trim() || '买家昵称暂不可用'}>
+                                    {order.buyer_fish_nick?.trim() || '买家昵称暂不可用'}
+                                  </div>
+                                  <div className="truncate text-xs text-slate-500 dark:text-slate-400" title={order.buyer_id || ''}>
+                                    {order.buyer_id || '-'}
+                                  </div>
+                                </div>
+                              </td>
+                            )
                           case 'buyer_fish_nick':
-                            return <td key={col.key} className="whitespace-nowrap text-sm text-slate-700 dark:text-slate-200">{order.buyer_fish_nick || '-'}</td>
+                            return (
+                              <td key={col.key} className="whitespace-nowrap text-sm text-slate-700 dark:text-slate-200">
+                                <div className="max-w-[180px] truncate" title={order.buyer_fish_nick?.trim() || '买家昵称暂不可用'}>
+                                  {order.buyer_fish_nick?.trim() || '-'}
+                                </div>
+                              </td>
+                            )
                           case 'chat_id':
                             return <td key={col.key} className="whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{order.chat_id || '-'}</td>
                           case 'quantity':

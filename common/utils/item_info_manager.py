@@ -185,7 +185,9 @@ class ItemInfoManager:
                     for card in card_list:
                         card_data = card.get('cardData', {})
                         if card_data:
+                            from common.utils.catalog_media import extract_catalog_media
                             item_info = {
+                                **extract_catalog_media(card_data),
                                 'id': card_data.get('id', ''),
                                 'title': card_data.get('title', ''),
                                 'price': card_data.get('priceInfo', {}).get('price', ''),

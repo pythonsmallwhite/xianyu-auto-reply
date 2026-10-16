@@ -39,6 +39,8 @@ class PublishBatch(TimestampMixin, Base):
     account_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     window_hours: Mapped[int | None] = mapped_column(Integer)
+    # NULL is a legacy queue: preserve its random-address behavior.
+    address_mode: Mapped[str | None] = mapped_column(String(20))
     window_started_at: Mapped[datetime | None] = mapped_column(SCHEDULE_DATETIME)
     deadline_at: Mapped[datetime | None] = mapped_column(SCHEDULE_DATETIME)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default=BATCH_STATUS_PENDING)

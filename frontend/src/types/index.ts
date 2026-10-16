@@ -120,6 +120,10 @@ export interface Item {
   desc?: string
   item_description?: string
   item_detail?: string
+  // 商品列表由后端统一提取的媒体；旧响应缺失时显示占位。
+  item_images?: string[]
+  item_video_url?: string | null
+  item_video_cover?: string | null
   item_category?: string
   price?: string
   item_price?: string

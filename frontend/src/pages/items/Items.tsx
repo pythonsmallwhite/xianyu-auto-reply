@@ -7,6 +7,7 @@ import { getAccountDetails } from '@/api/accounts'
 import { getUserSetting } from '@/api/settings'
 import SellerItemEditModal from './SellerItemEditModal'
 import BatchSellerItemEditModal from './BatchSellerItemEditModal'
+import { ItemThumbnail } from './ItemThumbnail'
 import { useUIStore } from '@/store/uiStore'
 import { PageLoading } from '@/components/common/Loading'
 import { useAuthStore } from '@/store/authStore'
@@ -36,6 +37,7 @@ export function Items() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [selectedAccount, setSelectedAccount] = useState(() => searchParams.get('account') || '')
   const [showHistory, setShowHistory] = useState(false)
+  const [showThumbnails, setShowThumbnails] = useState(false)
   const [searchKeyword, setSearchKeyword] = useState('')
   const [selectedIds, setSelectedIds] = useState<Set<string | number>>(new Set())
   const [fetchingType, setFetchingType] = useState<'single' | 'all' | null>(null)
@@ -1391,6 +1393,10 @@ export function Items() {
               }} />
               显示历史/来源待确认商品
             </label>
+            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 pb-2">
+              <input type="checkbox" checked={showThumbnails} onChange={(event) => setShowThumbnails(event.target.checked)} />
+              显示小图
+            </label>
             <div className="input-group min-w-[240px] flex-1">
               <label className="input-label">搜索商品</label>
               <div className="relative">
@@ -1486,6 +1492,7 @@ export function Items() {
                   </th>
                   <th className="min-w-[150px]">账号ID</th>
                   <th className="min-w-[160px]">商品ID</th>
+                  {showThumbnails && <th className="w-[72px]">小图</th>}
                   <th className="min-w-[260px]">商品标题</th>
                   <th className="min-w-[80px]">价格</th>
                   <th className="min-w-[80px] text-center">库存</th>
@@ -1504,7 +1511,7 @@ export function Items() {
             <tbody>
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={16}>
+                  <td colSpan={showThumbnails ? 17 : 16}>
                     <div className="empty-state py-8">
                       <Package className="empty-state-icon" />
                       <p className="text-gray-500">暂无商品数据</p>
@@ -1543,6 +1550,9 @@ export function Items() {
                         <ExternalLink className="w-3 h-3" />
                       </a>
                     </td>
+                    {showThumbnails && (
+                      <td><ItemThumbnail item={item} /></td>
+                    )}
                     <td className="max-w-[280px]">
                       <div
                         className="font-medium line-clamp-2 cursor-help"

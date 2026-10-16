@@ -53,15 +53,14 @@ class XianyuDirectPublisher:
                 static_root=self.static_root,
             )
         except DirectPublishError as exc:
-            if not exc.account_invalid:
-                raise
-            # 媒体上传时判定账号失效：保持原有返回结构，交由上层标记账号状态。
+            # Payload/media preparation precedes the final publish request.
+            # It is a definite failure even on the unguarded single-item path.
             return {
                 "success": False,
                 "message": str(exc),
                 "item_id": None,
                 "item_url": None,
-                "account_invalid": True,
+                "account_invalid": bool(exc.account_invalid),
                 "cookies_str": cookie,
             }
 

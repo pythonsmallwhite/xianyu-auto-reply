@@ -114,6 +114,7 @@ async def execute_single_publish(
     prepared_log_id: int | None = None,
     before_publish: Callable[[], Awaitable[None]] | None = None,
     request_guard: Callable[[], AsyncContextManager[None]] | None = None,
+    address_mode: str | None = None,
 ) -> Dict[str, Any]:
     """执行单品发布并返回统一结果。"""
     log_svc = PublishLogService(session)
@@ -192,11 +193,18 @@ async def execute_single_publish(
             "log_id": log.id,
         }
 
-    # 批量任务保留地址库分配口径；单品发布仍可使用手工地址。
-    if batch_id is not None:
-        item_data = {key: value for key, value in item_data.items()
-                     if key not in {"address", "address_expected_text"}}
     try:
+        # Missing mode identifies old queues; only those retain legacy random.
+        if batch_id is not None:
+            mode = address_mode if address_mode is not None else "random"
+            if mode == "random":
+                item_data = {key: value for key, value in item_data.items()
+                             if key not in {"address", "address_expected_text"}}
+            elif mode == "material":
+                if not isinstance(item_data.get("address"), str) or not item_data["address"].strip():
+                    raise ValueError("素材地址模式要求明确地址，不能自动改用随机地址")
+            else:
+                raise ValueError("批次地址策略无效，禁止发布")
         resolved_address = await address_svc.resolve_publish_address(account_id, item_data)
     except ValueError as exc:
         if existing_log and existing_log.status in {"failed", "pending"}:
@@ -316,11 +324,15 @@ async def execute_single_publish(
                 static_root=static_root,
                 **publish_options,
             )
+        elif publish_item_data.get("videos"):
+            result = {
+                "success": False,
+                "message": "普通卖家发布通道暂不支持视频，请使用已支持视频的鱼小铺账号或明确移除素材视频后重试",
+            }
         else:
-            # 普通卖家单品发布不提供视频能力，后端兜底丢弃绕过前端提交的视频。
+            # 普通卖家能力不足时必须明确失败，不能静默丢弃素材。
             personal_item_data = {
                 **publish_item_data,
-                "videos": [],
                 "quantity": PERSONAL_SELLER_DEFAULT_STOCK,
                 "stock": PERSONAL_SELLER_DEFAULT_STOCK,
             }

@@ -94,7 +94,7 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
             ])
             await session.commit()
 
-    async def create(self, batch_id="batch-1", owner_id=7, account_ids=None, material_ids=(11,), window_hours=1):
+    async def create(self, batch_id="batch-1", owner_id=7, account_ids=None, material_ids=(11,), window_hours=1, address_mode="material"):
         async with self.maker() as session:
             # 不绕过生产素材归属校验；不同 owner 使用独立素材主键。
             mids = [mid if owner_id == 7 else mid + 10000 for mid in material_ids]
@@ -104,8 +104,10 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
             await session.commit()
             return await self.Service(session).create_batch(
                 owner_id=owner_id, account_ids=account_ids or ["acct", "acct"], batch_id=batch_id,
-                materials=[{"id": mid, "title": f"素材{mid}", "description": "离线素材", "price": 1} for mid in mids],
+                materials=[{"id": mid, "title": f"素材{mid}", "description": "离线素材", "price": 1,
+                            "address": "离线测试素材地址"} for mid in mids],
                 window_hours=window_hours,
+                address_mode=address_mode,
             )
 
     async def start_request(self, kwargs):
@@ -135,6 +137,133 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
             return result
         self.execute.side_effect = execute
         await self.Service.run_batch(batch_id)
+
+    async def test_immediate_is_due_now_survives_restart_and_runs_once(self):
+        batch = await self.create(window_hours=0, material_ids=(11, 12))
+        self.offsets.assert_not_called()
+        self.assertEqual(batch.account_count, 1)
+        targets = await self.rows(self.Target)
+        for target in targets:
+            self.assertEqual((target.scheduled_at, target.available_at), (self.now, self.now))
+            self.assertEqual(target.deadline_at, self.now + timedelta(hours=24))
+            self.assertEqual(target.minimum_gap_seconds, 0)
+        self.assertEqual(await self.Service.find_next_batch(), batch.id)
+        self.assertEqual(await self.Service.recover_interrupted_targets(), 0)
+        for _ in targets:
+            await self.run_result({"success": True, "item_id": "offline-item"})
+        await self.Service.run_batch(batch.id)
+        self.assertEqual(self.execute.await_count, 2)
+        self.assertTrue(all(t.status == "success" for t in await self.rows(self.Target)))
+        self.assertEqual(self.execute.await_args.kwargs["address_mode"], "material")
+
+    async def test_immediate_multiple_accounts_rejected_without_writes(self):
+        with self.assertRaisesRegex(ValueError, "一个账号"):
+            await self.create(account_ids=["acct", "other"], window_hours=0)
+        self.assertEqual(await self.rows(self.Target), [])
+        self.assertEqual(await self.rows(self.Batch), [])
+
+    async def test_address_modes_persist_and_legacy_null_stays_random(self):
+        for mode in ("material", "random"):
+            await self.create(mode, material_ids=(11 if mode == "material" else 12,), address_mode=mode)
+            await self.run_result({"success": False, "message": "offline rejection"}, mode)
+            self.assertEqual(self.execute.await_args.kwargs["address_mode"], mode)
+        async with self.maker() as session:
+            batch = await session.get(self.Batch, "random")
+            batch.address_mode = None
+            await session.commit()
+            target = next(t for t in await self.rows(self.Target) if t.batch_id == "random")
+            await self.Service(session).retry_failed(7, "random", [target.id], window_hours=0)
+            status = await self.Service.get_status(session, 7, "random")
+            self.assertEqual(status["address_mode"], "random")
+        await self.run_result({"success": False}, "random")
+        self.assertIsNone(self.execute.await_args.kwargs["address_mode"])
+
+    async def test_material_mode_rejects_missing_address_and_invalid_strategy(self):
+        for address in (None, "", "   ", 123):
+            async with self.maker() as session:
+                with self.assertRaisesRegex(ValueError, "明确地址"):
+                    await self.Service(session).create_batch(owner_id=7, account_ids=["acct"],
+                        materials=[{"id": 11, "address": address}], batch_id="bad", window_hours=1)
+        with self.assertRaisesRegex(ValueError, "address_mode"):
+            await self.create(address_mode="bad")
+        self.assertEqual(await self.rows(self.Batch), [])
+
+    async def test_duplicate_batch_is_idempotent_and_changed_options_rejected(self):
+        await self.create(window_hours=0)
+        await self.create(window_hours=0)
+        self.assertEqual(len(await self.rows(self.Target)), 1)
+        for kwargs in ({"window_hours": 1}, {"window_hours": 0, "address_mode": "random"},
+                       {"window_hours": 0, "material_ids": (12,)}):
+            with self.assertRaisesRegex(ValueError, "不可更改"):
+                await self.create(**kwargs)
+        self.assertEqual(len(await self.rows(self.Target)), 1)
+
+    async def test_immediate_retry_only_selected_single_account_failures(self):
+        async with self.maker() as session:
+            session.add(self.XYAccount(id=3, owner_id=7, account_id="acct2", cookie="offline", login_method="cookie"))
+            await session.commit()
+        await self.create(account_ids=["acct", "acct2"])
+        for _ in range(2):
+            await self.run_result({"success": False, "message": "offline rejection"})
+        targets = await self.rows(self.Target)
+        async with self.maker() as session:
+            with self.assertRaisesRegex(ValueError, "同一个账号"):
+                await self.Service(session).retry_failed(7, "batch-1", [t.id for t in targets], window_hours=0)
+            self.assertEqual(await self.Service(session).retry_failed(7, "batch-1", [targets[0].id], window_hours=0), 1)
+        first, second = await self.rows(self.Target)
+        self.assertEqual((first.status, first.window_hours, first.scheduled_at), ("pending", 0, self.now))
+        self.assertEqual(second.status, "failed")
+        self.assertEqual(len(await self.rows(self.Attempt)), 2)
+
+    async def test_immediate_rejects_success_unknown_skipped_retry(self):
+        for state in ("success", "unknown", "skipped"):
+            await self.create(state, material_ids=({"success": 11, "unknown": 12, "skipped": 13}[state],), window_hours=0)
+            async with self.maker() as session:
+                target = (await session.scalars(select(self.Target).where(self.Target.batch_id == state))).one()
+                target.status = state
+                await session.commit()
+                with self.assertRaisesRegex(ValueError, "明确失败"):
+                    await self.Service(session).retry_failed(7, state, [target.id], window_hours=0)
+
+    async def test_immediate_honors_prior_batch_gap_and_live_product_lease(self):
+        await self.create("scheduled")
+        await self.create("immediate", window_hours=0)
+        first = await self.Service._claim_next_target("scheduled")
+        second = await self.Service._claim_next_target("immediate")
+        async with self.Service._request_guard(first):
+            with self.assertRaises(self.module.PublishScheduleDeferred):
+                async with self.Service._request_guard(second):
+                    self.fail("must hold product lease")
+        with self.assertRaises(self.module.PublishScheduleDeferred) as caught:
+            async with self.Service._request_guard(second):
+                self.fail("must preserve previous random-window gap")
+        self.assertEqual(caught.exception.retry_at, self.now + timedelta(seconds=1800))
+
+    async def test_new_immediate_batch_cannot_bypass_unknown_product(self):
+        await self.create("unknown", window_hours=0)
+        await self.run_result({"unknown": True}, "unknown")
+        await self.create("new", window_hours=0)
+        target = await self.Service._claim_next_target("new")
+        with self.assertRaisesRegex(ValueError, "结果未知"):
+            async with self.Service._request_guard(target):
+                self.fail("unknown product cannot be republished")
+
+    async def test_history_page_five_and_success_time_is_actual_finish(self):
+        for i in range(6):
+            await self.create(f"history-{i}", window_hours=0, material_ids=(11 + i,))
+        self.now += timedelta(seconds=17)
+        await self.run_result({"success": True, "item_id": "history-item"}, "history-0")
+        async with self.maker() as session:
+            service = self.Service(session)
+            first = await service.list_batches(7, 1, 5)
+            second = await service.list_batches(7, 2, 5)
+            self.assertEqual((len(first["list"]), len(second["list"]), first["total"]), (5, 1, 6))
+            self.assertFalse({b["batch_id"] for b in first["list"]} & {b["batch_id"] for b in second["list"]})
+            data = await service.list_targets(7, "history-0", 1, 5)
+            row = data["list"][0]
+            self.assertEqual(row["finished_at"], self.module.safe_isoformat(self.now))
+            self.assertEqual(row["finished_at"], row["attempts"][0]["finished_at"])
+            self.assertNotEqual(row["finished_at"], row["scheduled_at"])
 
     async def test_submission_persists_exact_targets_and_status(self):
         batch = await self.create(material_ids=(11, 11))
@@ -278,7 +407,8 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
             ("skipped", {"skipped": True}),
         ):
             with self.subTest(status=status):
-                await self.create(batch_id=status)
+                # Independent outcomes must not collide with the unknown-product guard.
+                await self.create(batch_id=status, material_ids=({"success": 11, "unknown": 12, "skipped": 13}[status],))
                 await self.run_result(result, status)
                 target = next(t for t in await self.rows(self.Target) if t.batch_id == status)
                 async with self.maker() as session:
@@ -558,21 +688,29 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
         from typing import List, Literal
         source = ast.parse((ROOT / "backend-web/app/api/routes/product_publish.py").read_text(encoding="utf-8-sig"))
         definitions = [node for node in source.body if isinstance(node, ast.ClassDef) and node.name in {"BatchPublishRequest", "BatchRetryRequest"}]
-        namespace = {"BaseModel": BaseModel, "Field": Field, "List": List, "Literal": Literal}
+        from pydantic import model_validator
+        namespace = {"BaseModel": BaseModel, "Field": Field, "List": List, "Literal": Literal,
+                     "model_validator": model_validator}
         exec(compile(ast.Module(body=definitions, type_ignores=[]), "batch_schema", "exec"), namespace)
         for name, payload in (("BatchPublishRequest", {"account_ids": ["acct"], "material_ids": [11]}), ("BatchRetryRequest", {"target_ids": [1]})):
             schema = namespace[name]
             schema.model_rebuild(_types_namespace=namespace)
             with self.assertRaises(ValidationError):
                 schema(**payload)
-            for invalid in (None, 2, 6, 0, 48):
+            for invalid in (None, 2, 6, 48):
                 with self.assertRaises(ValidationError):
                     schema(**payload, window_hours=invalid)
-            for hours in (1, 3, 5, 12, 24):
+            for hours in (0, 1, 3, 5, 12, 24):
                 self.assertEqual(schema(**payload, window_hours=hours).window_hours, hours)
+        create = namespace["BatchPublishRequest"]
+        self.assertEqual(create(account_ids=["acct", "acct"], material_ids=[11], window_hours=0).address_mode, "material")
+        with self.assertRaises(ValidationError):
+            create(account_ids=["acct", "other"], material_ids=[11], window_hours=0)
+        with self.assertRaises(ValidationError):
+            create(account_ids=["acct"], material_ids=[11], window_hours=1, address_mode="invalid")
 
     async def test_explicit_window_and_material_ownership_are_required(self):
-        for value in (None, 0, 2, 6, "1"):
+        for value in (None, 2, 6, "1", True):
             with self.assertRaises(ValueError):
                 await self.create(window_hours=value)
         async with self.maker() as session:

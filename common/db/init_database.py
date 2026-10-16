@@ -1748,6 +1748,7 @@ class DatabaseInitializer:
                 account_count INT NOT NULL DEFAULT 0,
                 total_count INT NOT NULL DEFAULT 0,
                 window_hours INT DEFAULT NULL,
+                address_mode VARCHAR(20) DEFAULT NULL,
                 window_started_at DATETIME DEFAULT NULL,
                 deadline_at DATETIME DEFAULT NULL,
                 status VARCHAR(20) NOT NULL DEFAULT 'pending',
@@ -1852,6 +1853,7 @@ class DatabaseInitializer:
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]
     COLUMN_MIGRATIONS = {
         "xy_publish_batches": [
+            ("address_mode", "VARCHAR(20) DEFAULT NULL", "total_count"),
             ("window_hours", "INT DEFAULT NULL", "total_count"),
             ("window_started_at", "DATETIME DEFAULT NULL", "window_hours"),
             ("deadline_at", "DATETIME DEFAULT NULL", "window_started_at"),

@@ -30,7 +30,6 @@ from common.utils.batch_schedule import (
     minimum_gap_seconds,
     next_allowed_start,
     plan_product_offsets,
-    validate_window_hours,
 )
 from common.utils.publish_outcome import classify_publish_result
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
@@ -39,6 +38,8 @@ LEASE_SECONDS = 120
 PRODUCT_LEASE_SECONDS = 90
 HEARTBEAT_SECONDS = 20
 ATTEMPT_TIMEOUT_SECONDS = 600
+# An execution expiry, not a randomized delay: immediate targets are due now.
+IMMEDIATE_EXECUTION_HOURS = 24
 ACTIVE = {"pending", "publishing"}
 TERMINAL = {"success", "failed", "unknown", "skipped"}
 
@@ -108,8 +109,8 @@ class DurablePublishBatchService:
         deadline_at: datetime,
     ) -> None:
         for group in DurablePublishBatchService._schedule_groups(targets).values():
-            gap = minimum_gap_seconds(len(group), window_hours)
-            offsets = plan_product_offsets(len(group), window_hours)
+            gap = minimum_gap_seconds(len(group), window_hours) if window_hours else 0
+            offsets = plan_product_offsets(len(group), window_hours) if window_hours else [0] * len(group)
             for target, offset in zip(group, offsets):
                 planned = window_started_at + timedelta(seconds=offset)
                 target.window_hours = window_hours
@@ -129,16 +130,41 @@ class DurablePublishBatchService:
         materials: list[dict[str, Any]],
         batch_id: str,
         window_hours: int,
+        address_mode: str = "material",
     ) -> PublishBatch:
-        if type(window_hours) is not int:
-            raise ValueError("请显式选择 1、3、5、12 或 24 小时窗口")
-        validate_window_hours(window_hours)
+        if type(window_hours) is not int or window_hours not in (0, 1, 3, 5, 12, 24):
+            raise ValueError("请显式选择立即发布或 1、3、5、12、24 小时窗口")
+        if address_mode not in {"material", "random"}:
+            raise ValueError("address_mode 必须为 material 或 random")
         accounts = list(dict.fromkeys(account_ids))
         materials = list({int(item["id"]): dict(item) for item in materials}.values())
         if not accounts or not materials:
             raise ValueError("批量发布至少需要一个账号和一条素材")
+        if window_hours == 0 and len(accounts) != 1:
+            raise ValueError("立即发布仅支持一个账号")
+        if address_mode == "material" and any(
+            not isinstance(item.get("address"), str) or not item["address"].strip()
+            for item in materials
+        ):
+            raise ValueError("素材地址模式要求每条素材有明确地址，请先补全地址或选择随机地址")
+        existing = (await self.session.execute(select(PublishBatch).where(
+            PublishBatch.id == batch_id,
+        ).with_for_update())).scalar_one_or_none()
+        if existing is not None:
+            if existing.owner_id != owner_id:
+                raise ValueError("批次 ID 已被使用")
+            old_targets = (await self.session.execute(select(PublishBatchTarget).where(
+                PublishBatchTarget.batch_id == batch_id,
+            ))).scalars().all()
+            old_materials = {t.material_id: t.material_payload for t in old_targets}
+            if (existing.window_hours != window_hours
+                    or (existing.address_mode or "random") != address_mode
+                    or {t.account_id for t in old_targets} != set(accounts)
+                    or old_materials != {int(m["id"]): m for m in materials}):
+                raise ValueError("同一批次 ID 不可更改发布参数")
+            return existing
         window_started_at = await self._database_now(self.session)
-        deadline_at = window_started_at + timedelta(hours=window_hours)
+        deadline_at = window_started_at + timedelta(hours=window_hours or IMMEDIATE_EXECUTION_HOURS)
         owned = set((await self.session.execute(select(XYAccount.account_id).where(
             XYAccount.owner_id == owner_id, XYAccount.account_id.in_(accounts),
         ))).scalars())
@@ -158,6 +184,7 @@ class DurablePublishBatchService:
             material_count=len(materials),
             account_count=len(accounts),
             total_count=len(accounts) * len(materials),
+            address_mode=address_mode,
             window_hours=window_hours,
             window_started_at=window_started_at,
             deadline_at=deadline_at,
@@ -291,6 +318,7 @@ class DurablePublishBatchService:
                 "account_id": target.account_id,
                 "internal_product_id": target.internal_product_id,
                 "material_payload": payload,
+                "address_mode": batch.address_mode,
                 "log_id": log.id,
                 "batch_id": batch_id,
                 "scheduled_at": target.scheduled_at,
@@ -352,10 +380,30 @@ class DurablePublishBatchService:
                 raise RuntimeError("发布执行权已失效，禁止继续发起请求")
             if now > deadline_at:
                 raise PublishWindowExpired("目标已超过排程窗口，未发起平台请求")
+            gap_seconds = target_row.minimum_gap_seconds
+            if target_row.window_hours == 0 and schedule.last_request_started_at is not None:
+                # Immediate mode must not bypass the prior batch's product gap.
+                previous_gap = (await session.execute(select(
+                    func.max(PublishBatchAttempt.minimum_gap_seconds),
+                ).join(PublishBatchTarget, PublishBatchAttempt.target_id == PublishBatchTarget.id).where(
+                    PublishBatchTarget.owner_id == target_row.owner_id,
+                    PublishBatchTarget.internal_product_id == target_row.internal_product_id,
+                    PublishBatchAttempt.request_started_at == schedule.last_request_started_at,
+                ))).scalar_one()
+                gap_seconds = max(gap_seconds, previous_gap or 0)
+            unresolved = (await session.execute(select(PublishBatchTarget.id).where(
+                PublishBatchTarget.owner_id == target_row.owner_id,
+                PublishBatchTarget.internal_product_id == target_row.internal_product_id,
+                PublishBatchTarget.account_id == target_row.account_id,
+                PublishBatchTarget.id != target_row.id,
+                PublishBatchTarget.status == "unknown",
+            ).limit(1))).scalar_one_or_none()
+            if unresolved is not None:
+                raise ValueError("该账号同一商品存在结果未知的发布，请先核对原任务")
             earliest = next_allowed_start(
                 target_row.scheduled_at or now,
                 schedule.last_request_started_at,
-                timedelta(seconds=target_row.minimum_gap_seconds),
+                timedelta(seconds=gap_seconds),
                 deadline_at,
             )
             if earliest is None or earliest > deadline_at:
@@ -424,6 +472,7 @@ class DurablePublishBatchService:
                     item_data=target["material_payload"],
                     static_root=STATIC_ROOT,
                     batch_id=batch_id,
+                    address_mode=target["address_mode"],
                     prepared_log_id=target["log_id"],
                     request_guard=lambda: DurablePublishBatchService._request_guard(target),
                 )
@@ -715,11 +764,10 @@ class DurablePublishBatchService:
         target_ids: list[int],
         window_hours: int,
     ) -> int:
-        if type(window_hours) is not int:
-            raise ValueError("请显式选择 1、3、5、12 或 24 小时窗口")
-        validate_window_hours(window_hours)
+        if type(window_hours) is not int or window_hours not in (0, 1, 3, 5, 12, 24):
+            raise ValueError("请显式选择立即发布或 1、3、5、12、24 小时窗口")
         window_started_at = await self._database_now(self.session)
-        deadline_at = window_started_at + timedelta(hours=window_hours)
+        deadline_at = window_started_at + timedelta(hours=window_hours or IMMEDIATE_EXECUTION_HOURS)
         batch = (await self.session.execute(select(PublishBatch).where(
             PublishBatch.id == batch_id, PublishBatch.owner_id == owner_id,
         ).with_for_update())).scalar_one_or_none()
@@ -738,6 +786,8 @@ class DurablePublishBatchService:
         ).with_for_update())).scalars().all()
         if len(targets) != len(ids) or any(t.status != "failed" for t in targets):
             raise ValueError("只能重试本批次明确失败的项目，成功、未知和跳过项不可重试")
+        if window_hours == 0 and len({t.account_id for t in targets}) != 1:
+            raise ValueError("立即重试仅支持本次选中的失败目标属于同一个账号")
         product_service = InternalProductService(self.session)
         for target in targets:
             if target.internal_product_id is None:
@@ -820,6 +870,7 @@ class DurablePublishBatchService:
             "timed_out": timed_out,
             "error_message": batch.error_message,
             "window_hours": batch.window_hours,
+            "address_mode": batch.address_mode or "random",
             "window_started_at": safe_isoformat(batch.window_started_at),
             "deadline_at": safe_isoformat(batch.deadline_at),
             "snapshot_available": True,

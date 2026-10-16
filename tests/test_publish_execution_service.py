@@ -280,6 +280,46 @@ class PublishExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((current.resolved_address_id, current.resolved_address_text, current.address_source), (23, "地址库测试地址", "global_pool"))
         self.bind.assert_awaited_once_with(owner_id=7, publish_log_id=log.id)
 
+    async def test_batch_material_mode_preserves_address_and_snapshot(self):
+        self.item.update(address="素材测试地址", address_expected_text="测试校验")
+        original = deepcopy(self.item)
+        result = await self.execute(batch_id="batch-1", address_mode="material")
+        self.assertTrue(result["success"])
+        self.resolve.assert_awaited_once_with("acct", original)
+        self.assertEqual(self.shop.await_args.kwargs["item_data"]["address"], original["address"])
+        self.assertEqual(self.item, original)
+
+    async def test_batch_missing_material_address_fails_before_pool_and_platform(self):
+        result = await self.execute(batch_id="batch-1", address_mode="material")
+        self.assertFalse(result["success"])
+        self.assertIn("明确地址", result["message"])
+        self.resolve.assert_not_awaited()
+        self.reserve.assert_not_awaited()
+        self.shop.assert_not_awaited()
+        self.assertEqual((await self.logs())[0].status, "failed")
+
+    async def test_batch_explicit_random_uses_pool(self):
+        self.item.update(address="素材测试地址")
+        result = await self.execute(batch_id="batch-1", address_mode="random")
+        self.assertTrue(result["success"])
+        self.assertNotIn("address", self.resolve.await_args.args[1])
+        self.assertEqual((await self.logs())[0].address_source, "global_pool")
+
+    async def test_personal_video_rejected_without_silent_removal_or_platform_call(self):
+        self.detect.return_value = {"success": True, "is_fish_shop": False}
+        self.item["videos"] = [{"url": "/static/videos/test.mp4"}]
+        original = deepcopy(self.item)
+        result = await self.execute()
+        self.assertFalse(result["success"])
+        self.assertFalse(result.get("unknown"))
+        self.assertIn("暂不支持视频", result["message"])
+        self.personal.assert_not_awaited()
+        self.shop.assert_not_awaited()
+        self.before.assert_not_awaited()
+        self.assertEqual(self.item, original)
+        self.assertEqual((await self.logs())[0].status, "failed")
+        self.assertEqual(self.settle.await_args.args[1], "failed")
+
     async def test_single_publish_keeps_manual_address_and_creates_real_log(self):
         self.item.update(address="手工测试地址", address_expected_text="手工校验文本")
         original = deepcopy(self.item)
