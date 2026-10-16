@@ -7,6 +7,7 @@ import {
   Pressable,
   RefreshControl,
   TextInput,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -16,19 +17,92 @@ import { MessageCircle, UserX, Search } from 'lucide-react-native';
 import { colors, spacing, typography, radius } from '@/lib/theme';
 import { useConfigStore } from '@/stores/config';
 import { useAuthStore } from '@/stores/auth';
-import { getServerUrl, getToken } from '@/lib/config';
 import { wsManager } from '@/lib/ws';
 import {
   getChatAccounts,
   getConversations,
+  getChatUserInfos,
   connectAccount,
   type ChatAccount,
   type Conversation,
   type ChatMessage,
+  type ChatUserInfo,
 } from '@/api/wrappers/chat';
 
 /** 会话列表同步条数上限：避免长列表在合并后无限增长 */
 const CONV_CACHE_LIMIT = 200;
+const AVATAR_BATCH_SIZE = 20;
+
+function needsBuyerName(conv: Conversation): boolean {
+  return !conv.otherUserName || conv.otherUserName === conv.otherUserId || conv.otherUserName === '未知用户';
+}
+
+function applyBuyerInfos(conversations: Conversation[], infos: Record<string, ChatUserInfo>): Conversation[] {
+  return conversations.map((conv) => {
+    const info = infos[conv.otherUserId];
+    if (!info) return conv;
+    return {
+      ...conv,
+      otherUserAvatar: conv.otherUserAvatar || info.avatar || '',
+      otherUserName: needsBuyerName(conv) && info.nick ? info.nick : conv.otherUserName,
+    };
+  });
+}
+
+/** 每批最多 20 人，按原始会话 ID 查询；账号切换后不再请求或写入。 */
+async function hydrateConversationAvatars(
+  accountId: string,
+  conversations: Conversation[],
+  isCurrent: () => boolean,
+  apply: (infos: Record<string, ChatUserInfo>) => void,
+): Promise<void> {
+  const seen = new Set<string>();
+  const queries = conversations.filter((conv) => {
+    if (!conv.otherUserId || !conv.cid || (conv.otherUserAvatar && !needsBuyerName(conv)) || seen.has(conv.otherUserId)) return false;
+    seen.add(conv.otherUserId);
+    return true;
+  }).map((conv) => ({ userId: conv.otherUserId, cid: conv.rawCid || conv.cid }));
+  for (let offset = 0; offset < queries.length; offset += AVATAR_BATCH_SIZE) {
+    if (!isCurrent()) return;
+    try {
+      const infos = await getChatUserInfos(accountId, queries.slice(offset, offset + AVATAR_BATCH_SIZE));
+      if (!isCurrent()) return;
+      apply(infos);
+    } catch {
+      // 资料不可用不阻塞聊天；下次刷新可再次补齐。
+    }
+  }
+}
+
+function conversationAvatar(conv: Conversation): string {
+  const url = conv.otherUserAvatar?.trim() || '';
+  return url.startsWith('//') ? `https:${url}` : url;
+}
+
+function avatarInitial(name?: string, id?: string): string {
+  return (name || id || '?').trim().charAt(0).toUpperCase() || '?';
+}
+
+function ConversationAvatar({ conversation }: { conversation: Conversation }) {
+  const uri = conversationAvatar(conversation);
+  const [failedUri, setFailedUri] = useState('');
+  return (
+    <View style={styles.convAvatar}>
+      {uri && uri !== failedUri ? (
+        <Image source={{ uri }} style={styles.convAvatarImage} onError={() => setFailedUri(uri)} />
+      ) : (
+        <Text style={styles.convAvatarText}>{avatarInitial(conversation.otherUserName, conversation.otherUserId)}</Text>
+      )}
+    </View>
+  );
+}
+
+function messageSummary(message: ChatMessage): string {
+  if (message.type === 'image') return '[图片]';
+  if (message.type === 'video') return '[视频]';
+  if (message.type === 'card') return '[卡片]';
+  return message.text;
+}
 
 /**
  * 按 cid 合并会话列表
@@ -85,6 +159,12 @@ export default function MessagesScreen() {
   const hasMoreRef = useRef(true);
   // 会话请求序号：切账号并发时丢弃过期响应
   const convSeqRef = useRef(0);
+  const avatarScopeRef = useRef<{ accountId: string } | null>(null);
+  useEffect(() => {
+    const scope = selectedAccount ? { accountId: selectedAccount.account_id } : null;
+    avatarScopeRef.current = scope;
+    return () => { if (avatarScopeRef.current === scope) avatarScopeRef.current = null; };
+  }, [selectedAccount?.account_id]);
 
   const loadAccounts = useCallback(async () => {
     try {
@@ -126,6 +206,11 @@ export default function MessagesScreen() {
         }
         cursorRef.current = resp.nextCursor;
         hasMoreRef.current = resp.hasMore;
+        const scope = avatarScopeRef.current;
+        const isCurrent = () => !!scope && avatarScopeRef.current === scope && scope.accountId === targetAccountId;
+        void hydrateConversationAvatars(targetAccountId, resp.conversations, isCurrent, (infos) => {
+          setConversations((prev) => isCurrent() ? applyBuyerInfos(prev, infos) : prev);
+        });
       } catch (e) {
         if (convSeqRef.current === seq) console.error('加载会话失败', e);
       } finally {
@@ -193,12 +278,9 @@ export default function MessagesScreen() {
             rawCid: cid,
             otherUserId: message.senderId || '',
             otherUserName: message.senderName || message.senderId || '未知用户',
-            otherUserAvatar: '',
+            otherUserAvatar: !message.isSelf ? message.senderAvatar || '' : '',
             itemTitle: '',
-            lastMessageSummary:
-              message.type === 'image' ? '[图片]' :
-              message.type === 'card' ? '[卡片]' :
-              message.text,
+            lastMessageSummary: messageSummary(message),
             lastMessageTime: message.time,
             unreadCount: cid === wsManager.getActiveCid() ? 0 : 1,
           };
@@ -208,10 +290,8 @@ export default function MessagesScreen() {
         const conv = prev[idx];
         const updated: Conversation = {
           ...conv,
-          lastMessageSummary:
-            message.type === 'image' ? '[图片]' :
-            message.type === 'card' ? '[卡片]' :
-            message.text,
+          otherUserAvatar: !message.isSelf && message.senderAvatar ? message.senderAvatar : conv.otherUserAvatar,
+          lastMessageSummary: messageSummary(message),
           lastMessageTime: message.time,
           unreadCount: cid === wsManager.getActiveCid() ? 0 : conv.unreadCount + 1,
         };
@@ -238,6 +318,7 @@ export default function MessagesScreen() {
   }, [selectedAccount, loadConversations]);
 
   async function handleSelectAccount(acc: ChatAccount) {
+    if (acc.account_id === selectedAccount?.account_id) return;
     if (!acc.connected) {
       try {
         await connectAccount(acc.account_id);
@@ -250,6 +331,10 @@ export default function MessagesScreen() {
     if (selectedAccount) {
       wsManager.disconnect(selectedAccount.account_id);
     }
+    // 同步使旧请求失效，不能把上一个账号的头像或会话合并到新账号。
+    avatarScopeRef.current = null;
+    convSeqRef.current += 1;
+    setConversations([]);
     setSelectedAccount(acc);
   }
 
@@ -267,6 +352,8 @@ export default function MessagesScreen() {
         account_id: selectedAccount?.account_id ?? '',
         name: conv.otherUserName || conv.otherUserId,
         buyer_id: conv.otherUserId,
+        raw_cid: conv.rawCid || conv.cid,
+        avatar: conversationAvatar(conv),
       },
     });
   }
@@ -301,11 +388,7 @@ export default function MessagesScreen() {
         >
           <View style={[styles.convItem, { backgroundColor: c.surface }]}>
             <View style={{ width: 3, alignSelf: 'stretch', backgroundColor: unread ? c.primary : 'transparent', marginRight: spacing.xs }} />
-            <View style={styles.convAvatar}>
-              <Text style={styles.convAvatarText}>
-                {(item.otherUserName || item.otherUserId || '?').charAt(0)}
-              </Text>
-            </View>
+            <ConversationAvatar conversation={item} />
             <View style={styles.convContent}>
               <View style={styles.convHeader}>
                 <Text style={[styles.convName, { color: c.text }, unread && { fontWeight: '700' }]} numberOfLines={1}>
@@ -494,6 +577,7 @@ const styles = StyleSheet.create({
     marginRight: spacing.md,
   },
   convAvatarText: { color: '#FFF', fontSize: 18, fontWeight: '600' },
+  convAvatarImage: { width: 44, height: 44, borderRadius: 22 },
   convContent: { flex: 1, gap: spacing.xs },
   convHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   convName: { ...typography.body, fontWeight: '600', flex: 1, marginRight: spacing.sm },

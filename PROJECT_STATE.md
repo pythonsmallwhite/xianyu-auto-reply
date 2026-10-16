@@ -1000,3 +1000,39 @@
 - 验证：`tsc --noEmit`（xianyu-mobile）无输出（✓）；Web `vite build` 在上一轮已验证（✓）；Python `py_compile` 与 `check_static.py` 在上一轮已验证（✓）。
 - 当前状态：全部改动未提交，工作区约 120+ 文件变更（backend-web、websocket、scheduler、common、frontend/src、xianyu-mobile）。旧数据库表未 DROP，已有库中发货相关列保留不用。
 - 下一步：按用户意愿提交并推送（建议一个单独 commit 打包 R17 全部改动），再真实部署后确认无残留入口。
+
+### 2026-10-16：移动端六项体验修复（R18-R23，本轮用户明确需求）
+
+- 来源：用户本轮明确提出手机端登录、素材库、消息头像/视频、商品 tab 和“我的”排序六项需求。
+- R18 登录：手机端继续先配置服务器，但登录页只保留与 Web 一致的账号密码登录；移除邮箱密码、邮箱验证码等入口。验收：登录页无其他登录 tab/表单，`npx tsc --noEmit` 通过。
+- R19 素材库：手机端可新增并编辑商品素材（至少标题、描述、价格、图片），保存后可直接在手机端商品发布流程选择。验收：素材 CRUD 调用后端 `/api/v1/product-publish/materials`，新素材能回到发布列表。
+- R20 消息头像：手机端会话列表和聊天详情显示后端返回的买家头像，缺失时显示首字母占位。验收：头像 URL 贯穿会话列表、路由参数和详情渲染。
+- R21 消息视频：手机端支持选择、发送并展示视频消息，兼容后端现有 `/api/v1/chat-new/send-video/{account_id}` 与 `contentType=4` 消息字段。验收：视频消息类型有明确渲染，发送失败可见，不影响文本/图片消息。
+- R22 商品 tab：底部“商品”tab 直接展示商品管理页，不再打开商品监控。验收：进入 `products` 后显示商品管理列表/编辑入口。
+- R23 我的排序：“商品与推广”分组移到第一位，商品发布、商品管理、AI 上架、AI 配置位于该分组前四项。验收：菜单顺序与用户指定一致。
+- 当前状态：进行中；已完成源码勘察和 worker 拆分，尚未派发/合并。
+- 当前停点：等待 Orca 三个独立 worker 启动；主分支保留已有未提交的 Android 构建脚本、测试和 README 改动，不覆盖。
+- 验证：已运行只读 `git status`、移动端源码/API 定位、后端素材与聊天视频协议定位；尚未运行本轮构建或 TypeScript 检查。
+- 未提交文件（既有）：`PROJECT_STATE.md`、`scripts/build-android-apk.sh`、`tests/test_android_build.sh`、`xianyu-mobile/README.md`。本轮 worker 不得修改这些文件或互相所有的移动端文件。
+- 下一步：创建 Orca Run/Tasks，启动 `gpt-6-astra` + `xhigh` + 用户要求的 Approve for me worker；收集 `worker_done` 后逐项审查、验证并合并到 `main`。
+### 2026-10-16：移动端六项体验修复阶段检查
+
+- R18 登录：已实现待验证；`xianyu-mobile/app/(onboarding)/login.tsx` 已移除邮箱密码、邮箱验证码及其表单/请求/状态，仅保留账号密码、Geetest、找回密码和可选注册入口。
+- R19-R23：进行中；商品 worker `ctx_62fef5180964` 和消息 worker `ctx_e016fac716dd` 已在独立 `codex/mobile-products`、`codex/mobile-messages` 工作树执行，实际终端显示 `GPT-6-Astra xhigh`，启动参数包含 `--approve-for-me` 和 `check_for_update_on_startup=false`。尚未收到 worker_done，不能宣称商品或消息需求完成。
+- Orca 过程：默认 worker 启动曾因 Codex 更新提示超时，旧 dispatch 已按回执释放/放弃；随后使用仓库指定 `C:/Users/zhishang_hu/.codex/.codex-orca/start-codex.cmd` 和独立 `codex/` 工作树重新派发。旧失败工作树保留但不再使用。
+- 验证：在 `xianyu-mobile` 执行 `npx tsc --noEmit`通过；登录页 `git diff --check` 通过；静态搜索未发现邮箱/验证码登录标识。尚未做 Android 真机、服务器连接或真实账号登录验收。
+- 当前停点：等待商品/消息 worker 完成并回报；随后审查各自 diff、运行移动端 tsc 与专项离线回归，选择性 cherry-pick/合并到 `main`，最后更新本段状态和提交边界。
+- 未提交文件：既有 `scripts/build-android-apk.sh`、`tests/test_android_build.sh`、`xianyu-mobile/README.md`；本轮 `xianyu-mobile/app/(onboarding)/login.tsx`；`PROJECT_STATE.md`。不暂存其他既有文件。
+
+### 最新交接：2026-10-16 R18-R23 集成验证完成，准备提交推送
+
+- 来源与授权：用户六项手机端需求，随后明确不要滑块认证、注册和找回密码；用户明确要求完成后提交并推送 main。此段替代上方早期移动阶段的保留滑块等口径，不修改既有历史原文。
+- R18 已实现待真机验证：手机只保留账号密码，删除滑块组件、注册/找回密码页面与无用认证封装；请求只有 username/password，核心登录保留，服务器配置及后端/Web 认证未改。
+- R19 已实现待真机验证：自有素材分页、新建/详情/编辑/删除确认、图片上传预览、分类/价格/库存/运费/所在地；商品发布页可进入素材库、新建编辑并在返回刷新；局部 PUT 保留未改字段。
+- R20/R21 已实现待真机验证：会话及详情头像、失败占位、rawCid 每批最多20人补查与账号切换保护；视频选择/20MB检查/multipart发送/平台回执/失败状态/点击播放弹窗；媒体操作栏独立一行。
+- R22/R23 已实现待真机验证：底部商品 tab 直接显示商品管理；我的首组商品与推广，前四项依次商品发布、商品管理、AI上架、AI配置；监控仍可访问，mine 栈重复 items 注册已删除。
+- main 组合验证：完整移动 tsc、13项素材检查、26场景聊天可靠性、发送回执、批次存储回归及 git diff --check 全部退出0。没有真实平台请求；APK构建、Android真机相册/视频播放/登录与发布未验收。消息专项新增测试文件因worker文件范围审查拒绝而未创建，不计通过。
+- Orca：run_32fc86972483；商品 ctx_62fef5180964、消息 ctx_e016fac716dd 均 worker_done succeeded。两者独立 codex/ 工作树、终端核验 GPT-6-Astra xhigh、实际上下文回报 auto_review；未创建功能commit，由主协调集成提交。codex/mobile-login旧任务abandoned，没有在运行，登录由主协调完成。
+- 当前停点：检查时 main 基线 d90dd557ef71425051afc604fcd5ea2a883f1655；六项源码已在main工作区合并并验证，15个功能/测试文件已限定暂存，本段交接随功能提交。随后按授权推送 origin/main，必须取得Git回执并核对远端SHA；不得把计划当作已推送。
+- 边界：原有 scripts/build-android-apk.sh、tests/test_android_build.sh、xianyu-mobile/README.md 及其OOM交接差异保留未提交；不纳入依赖、APK或构建产物。所有工作树保留，不删除未提交文件。
+- 下一步：提交推送并复核远端；用户重新打包后在限定测试对象验收上述六项。自动审批超时的命令未计执行成功；原有更广需求的未验证状态保持不变。

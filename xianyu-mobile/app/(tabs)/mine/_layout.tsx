@@ -32,6 +32,7 @@ export default function MineStackLayout() {
       <Stack.Screen name="monitor-logs" options={{ title: '监控日志' }} />
       <Stack.Screen name="monitor-fallback" options={{ title: '兜底账号' }} />
       <Stack.Screen name="product-publish" options={{ title: '商品发布' }} />
+      <Stack.Screen name="materials" options={{ title: '商品素材库' }} />
       <Stack.Screen name="items" options={{ title: '商品管理' }} />
       <Stack.Screen name="offline-batches" options={{ title: '关联商品延迟下架' }} />
       <Stack.Screen name="item-edit" options={{ title: '编辑商品' }} />
@@ -53,7 +54,6 @@ export default function MineStackLayout() {
       <Stack.Screen name="ai-listing-configs" options={{ title: 'AI 配置' }} />
       <Stack.Screen name="scheduled-tasks" options={{ title: '定时任务' }} />
       <Stack.Screen name="data-management" options={{ title: '数据管理' }} />
-      <Stack.Screen name="items" options={{ title: '商品管理' }} />
     </Stack>
   );
 }

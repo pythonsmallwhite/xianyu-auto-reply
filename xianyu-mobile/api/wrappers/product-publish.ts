@@ -4,7 +4,7 @@ const PREFIX = '/api/v1/product-publish';
 
 /** 解开 {success, message, data} 信封（后端业务失败也返回 HTTP 200，靠 success 区分） */
 function unwrapData<T>(body: unknown): T {
-  if (body && typeof body === 'object' && 'success' in body && 'data' in body) {
+  if (body && typeof body === 'object' && 'success' in body) {
     const obj = body as { success: unknown; data: unknown };
     if (obj.success === true || obj.success === 'true') return obj.data as T;
     const msg = (body as { message?: string }).message || '操作失败';
@@ -52,9 +52,14 @@ export async function uploadProductImages(uris: string[]): Promise<UploadedImage
 
   const { data } = (await (client.POST as any)(`${PREFIX}/upload/images`, {
     body: formData,
+    bodySerializer: (body: FormData) => body,
   })) as { data?: unknown };
 
-  return unwrapData<UploadedImages>(data);
+  const result = unwrapData<UploadedImages>(data);
+  if (!result || !Array.isArray(result.urls) || result.urls.length !== uris.length) {
+    throw new Error('图片上传响应无效');
+  }
+  return result;
 }
 
 export interface PublishMaterialOption {
@@ -68,6 +73,117 @@ export interface PublishMaterialOption {
 export interface PublishMaterialPage {
   list: PublishMaterialOption[];
   total: number;
+}
+
+export interface PlatformCategoryPathItem {
+  id: string;
+  name: string;
+}
+
+export interface MaterialCategoryCandidate {
+  cat_id?: string | null;
+  cat_name?: string | null;
+  channel_cat_id?: string | null;
+  channel_cat_name?: string | null;
+  leaf_id?: string | null;
+  tb_cat_id?: string | null;
+  path: PlatformCategoryPathItem[];
+  score?: number | null;
+}
+
+export interface ProductMaterial extends PublishMaterialOption {
+  description: string;
+  original_price?: number | null;
+  category?: string | null;
+  platform_category_id?: string | null;
+  platform_category_name?: string | null;
+  platform_channel_category_id?: string | null;
+  platform_channel_category_name?: string | null;
+  platform_leaf_id?: string | null;
+  platform_tb_category_id?: string | null;
+  platform_category_path?: PlatformCategoryPathItem[];
+  platform_attributes?: Record<string, unknown>[];
+  category_source?: 'manual' | 'recommendation';
+  category_confidence?: number | null;
+  quantity?: number;
+  shipping_method?: 'free' | 'distance' | 'fixed' | 'template' | 'none';
+  postage?: number;
+  address?: string | null;
+  address_expected_text?: string | null;
+  condition?: string;
+  specifications?: unknown[];
+  sku_rows?: unknown[];
+}
+
+export interface MaterialInput {
+  title: string;
+  description: string;
+  price: number;
+  images: string[];
+  original_price?: number | null;
+  category?: string | null;
+  platform_category_id?: string | null;
+  platform_category_name?: string | null;
+  platform_channel_category_id?: string | null;
+  platform_channel_category_name?: string | null;
+  platform_leaf_id?: string | null;
+  platform_tb_category_id?: string | null;
+  platform_category_path?: PlatformCategoryPathItem[];
+  platform_attributes?: Record<string, unknown>[];
+  category_source?: 'manual' | 'recommendation';
+  category_confidence?: number | null;
+  quantity?: number;
+  shipping_method?: 'free' | 'distance' | 'fixed' | 'template' | 'none';
+  postage?: number;
+  address?: string | null;
+  address_expected_text?: string | null;
+  condition?: string;
+}
+
+export async function getMaterial(id: number): Promise<ProductMaterial> {
+  const client = await getApiClient();
+  const { data } = (await (client.GET as any)(`${PREFIX}/materials/${id}`)) as { data?: unknown };
+  const result = unwrapData<ProductMaterial>(data);
+  if (!result || result.id !== id) throw new Error('素材详情响应无效');
+  return result;
+}
+
+export async function createMaterial(input: MaterialInput): Promise<number> {
+  const client = await getApiClient();
+  const { data } = (await (client.POST as any)(`${PREFIX}/materials`, { body: input })) as { data?: unknown };
+  const result = unwrapData<{ id: number }>(data);
+  if (!result || !Number.isInteger(result.id) || result.id <= 0) throw new Error('素材创建结果无法确认');
+  return result.id;
+}
+
+export async function updateMaterial(id: number, input: Partial<MaterialInput>): Promise<void> {
+  const client = await getApiClient();
+  const { data } = (await (client.PUT as any)(`${PREFIX}/materials/${id}`, { body: input })) as { data?: unknown };
+  assertMaterialMutation(data);
+}
+
+export async function deleteMaterial(id: number): Promise<void> {
+  const client = await getApiClient();
+  const { data } = (await (client.DELETE as any)(`${PREFIX}/materials/${id}`)) as { data?: unknown };
+  assertMaterialMutation(data);
+}
+
+function assertMaterialMutation(data: unknown): void {
+  unwrapData<unknown>(data);
+  if (!data || typeof data !== 'object' || !('success' in data) ||
+      (data.success !== true && data.success !== 'true')) {
+    throw new Error('素材操作结果无法确认，请刷新列表核实');
+  }
+}
+
+export async function recommendMaterialCategory(title: string, description: string): Promise<MaterialCategoryCandidate[]> {
+  const client = await getApiClient();
+  const { data } = (await (client.POST as any)(`${PREFIX}/category/recommend`, {
+    body: { title, description },
+  })) as { data?: unknown };
+  const result = unwrapData<{ candidates: MaterialCategoryCandidate[] }>(data);
+  if (!result || !Array.isArray(result.candidates)) throw new Error('分类推荐响应无效');
+  return result.candidates;
 }
 
 export interface BatchAccountStatus {

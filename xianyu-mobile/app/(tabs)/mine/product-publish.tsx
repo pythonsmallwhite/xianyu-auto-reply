@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, RefreshControl, Pressable, Alert, useColorScheme,
 } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Card, Button, Loading } from '@/components/ui';
@@ -38,6 +38,7 @@ export default function ProductPublishScreen() {
 }
 
 function ProductPublishContent({ userId, serverUrl }: { userId: number; serverUrl: string }) {
+  const router = useRouter();
   const scheme = useColorScheme();
   const c = colors[scheme === 'dark' ? 'dark' : 'light'];
   const isAdmin = useAuthStore((state) => state.user?.is_admin);
@@ -79,6 +80,7 @@ function ProductPublishContent({ userId, serverUrl }: { userId: number; serverUr
   const clearGenerationRef = useRef(0);
   const clearingRef = useRef(false);
   const storageOperationRef = useRef(Promise.resolve());
+  const optionsGenerationRef = useRef(0);
 
   const persistRecord = useCallback(async (next: BatchRecord) => {
     if (!storageKey) throw new Error('登录状态尚未就绪');
@@ -99,6 +101,8 @@ function ProductPublishContent({ userId, serverUrl }: { userId: number; serverUr
   }, [storageKey]);
 
   const loadOptions = useCallback(async () => {
+    const generation = ++optionsGenerationRef.current;
+    setMoreLoading(false);
     setRefreshing(true);
     setLoadError('');
     try {
@@ -121,6 +125,7 @@ function ProductPublishContent({ userId, serverUrl }: { userId: number; serverUr
         getPublishMaterials(1, MATERIAL_PAGE_SIZE),
         getOwnAccountPks(),
       ]);
+      if (generation !== optionsGenerationRef.current) return;
       const accountList = ownAccountPks
         ? allAccounts.filter((account) => ownAccountPks.has(account.pk))
         : allAccounts;
@@ -136,10 +141,13 @@ function ProductPublishContent({ userId, serverUrl }: { userId: number; serverUr
         Array.from(current).filter((id) => ownMaterials.some((item) => item.id === id)),
       ));
     } catch (error) {
+      if (generation !== optionsGenerationRef.current) return;
       setLoadError(error instanceof Error ? error.message : '加载账号或素材失败');
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (generation === optionsGenerationRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [isAdmin, userId]);
 
@@ -173,16 +181,23 @@ function ProductPublishContent({ userId, serverUrl }: { userId: number; serverUr
         if (mounted) setRestored(true);
       }
     })();
-    void loadOptions();
     return () => { mounted = false; };
-  }, [storageKey, loadOptions]);
+  }, [storageKey]);
+
+  // 从素材库返回时刷新候选，避免继续发布已删除或已修改的旧素材。
+  useFocusEffect(useCallback(() => {
+    void loadOptions();
+    return () => { ++optionsGenerationRef.current; };
+  }, [loadOptions]));
 
   const loadMore = async () => {
-    if (moreLoading || materialPage * MATERIAL_PAGE_SIZE >= materialTotal) return;
+    if (refreshing || moreLoading || materialPage * MATERIAL_PAGE_SIZE >= materialTotal) return;
+    const generation = optionsGenerationRef.current;
     setMoreLoading(true);
     try {
       const nextPage = materialPage + 1;
       const page = await getPublishMaterials(nextPage, MATERIAL_PAGE_SIZE);
+      if (generation !== optionsGenerationRef.current) return;
       setMaterials((current) => {
         const ids = new Set(current.map((item) => item.id));
         return [...current, ...page.list.filter((item) => item.user_id === userId && !ids.has(item.id))];
@@ -190,9 +205,10 @@ function ProductPublishContent({ userId, serverUrl }: { userId: number; serverUr
       setMaterialPage(nextPage);
       setMaterialTotal(page.total);
     } catch (error) {
+      if (generation !== optionsGenerationRef.current) return;
       Alert.alert('加载素材失败', error instanceof Error ? error.message : '请稍后重试');
     } finally {
-      setMoreLoading(false);
+      if (generation === optionsGenerationRef.current) setMoreLoading(false);
     }
   };
 
@@ -581,17 +597,19 @@ function ProductPublishContent({ userId, serverUrl }: { userId: number; serverUr
 
         <Card style={styles.section}>
           <Text style={[styles.heading, { color: c.text }]}>选择素材 ({selectedMaterials.size})</Text>
+          <Button label="素材库 / 管理素材" variant="secondary" onPress={() => router.push('/(tabs)/mine/materials')} />
+          <Button label="新建素材" variant="secondary" onPress={() => router.push({ pathname: '/(tabs)/mine/materials', params: { create: '1' } })} />
           {materials.length === 0 ? (
             <Text style={[styles.caption, { color: c.textMuted }]}>
               {materialTotal > 0 && materialPage * MATERIAL_PAGE_SIZE < materialTotal
                 ? '当前页暂无自己的素材，可继续加载后续页。'
-                : '暂无可发布的自有素材，请先在 Web 素材库创建商品。'}
+                : '暂无可发布的自有素材，请点击新建素材。'}
             </Text>
           ) : materials.map((material) => {
             const selected = selectedMaterials.has(material.id);
             return (
+              <View key={material.id}>
               <Pressable
-                key={material.id}
                 accessibilityRole="checkbox"
                 accessibilityState={{ checked: selected }}
                 onPress={() => toggleMaterial(material.id)}
@@ -603,6 +621,8 @@ function ProductPublishContent({ userId, serverUrl }: { userId: number; serverUr
                   <Text style={[styles.small, { color: c.textSecondary }]}>¥{material.price}</Text>
                 </View>
               </Pressable>
+              <Button label="编辑素材" variant="ghost" onPress={() => router.push({ pathname: '/(tabs)/mine/materials', params: { editId: String(material.id) } })} />
+              </View>
             );
           })}
           {materialPage * MATERIAL_PAGE_SIZE < materialTotal ? (

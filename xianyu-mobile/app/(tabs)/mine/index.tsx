@@ -59,6 +59,22 @@ export default function MineScreen() {
   // 分组菜单（adminOnly: true 项仅管理员可见，与 Web 端导航一致；组内保持功能顺序）
   const menuSections: MenuSection[] = [
     {
+      title: '商品与推广',
+      items: [
+        { label: '商品发布', icon: ShoppingCart, onPress: () => router.push('/(tabs)/mine/product-publish') },
+        { label: '商品管理', icon: Package, onPress: () => router.push('/(tabs)/mine/items') },
+        { label: 'AI 上架', icon: Sparkles, onPress: () => router.push('/(tabs)/mine/ai-listing') },
+        { label: 'AI 配置', icon: SlidersHorizontal, onPress: () => router.push('/(tabs)/mine/ai-listing-configs') },
+        { label: '爬虫任务', icon: Bug, onPress: () => router.push('/(tabs)/mine/crawler') },
+        { label: '上新监控', icon: Radar, onPress: () => router.push('/(tabs)/mine/listing-monitor') },
+        { label: '监控分类', icon: FolderTree, onPress: () => router.push('/(tabs)/mine/monitor-categories') },
+        { label: '监控日志', icon: ScrollText, onPress: () => router.push('/(tabs)/mine/monitor-logs') },
+        { label: '兜底账号', icon: Users, onPress: () => router.push('/(tabs)/mine/monitor-fallback') },
+        { label: '上架历史', icon: History, onPress: () => router.push('/(tabs)/mine/ai-listing-history') },
+        { label: '共享扫码', icon: Share2, onPress: () => router.push('/(tabs)/mine/shared-scan') },
+      ],
+    },
+    {
       title: '核心功能',
       items: [
         { label: '仪表盘', icon: LayoutDashboard, onPress: () => router.push('/(tabs)/mine/dashboard') },
@@ -89,22 +105,6 @@ export default function MineScreen() {
         { label: '数据分析', icon: BarChart3, onPress: () => router.push('/(tabs)/mine/data-analysis') },
         { label: '风控日志', icon: Shield, onPress: () => router.push('/(tabs)/mine/risk-logs') },
         { label: '反馈', icon: MessageCircle, onPress: () => router.push('/(tabs)/mine/feedback') },
-      ],
-    },
-    {
-      title: '商品与推广',
-      items: [
-        { label: '爬虫任务', icon: Bug, onPress: () => router.push('/(tabs)/mine/crawler') },
-        { label: '上新监控', icon: Radar, onPress: () => router.push('/(tabs)/mine/listing-monitor') },
-        { label: '监控分类', icon: FolderTree, onPress: () => router.push('/(tabs)/mine/monitor-categories') },
-        { label: '监控日志', icon: ScrollText, onPress: () => router.push('/(tabs)/mine/monitor-logs') },
-        { label: '兜底账号', icon: Users, onPress: () => router.push('/(tabs)/mine/monitor-fallback') },
-        { label: '商品发布', icon: ShoppingCart, onPress: () => router.push('/(tabs)/mine/product-publish') },
-        { label: '商品管理', icon: Package, onPress: () => router.push('/(tabs)/mine/items') },
-        { label: 'AI 上架', icon: Sparkles, onPress: () => router.push('/(tabs)/mine/ai-listing') },
-        { label: '上架历史', icon: History, onPress: () => router.push('/(tabs)/mine/ai-listing-history') },
-        { label: 'AI 配置', icon: SlidersHorizontal, onPress: () => router.push('/(tabs)/mine/ai-listing-configs') },
-        { label: '共享扫码', icon: Share2, onPress: () => router.push('/(tabs)/mine/shared-scan') },
       ],
     },
     {

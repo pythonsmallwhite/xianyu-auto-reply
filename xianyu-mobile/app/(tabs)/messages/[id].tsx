@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -18,8 +18,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams } from 'expo-router';
 import { useColorScheme } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { WebView } from 'react-native-webview';
 import {
   Image as ImageIcon,
+  Video,
+  Play,
   MessageSquareText,
   Plus,
   ShoppingBag,
@@ -31,11 +34,14 @@ import { BlacklistButton } from '@/components/BlacklistButton';
 import { Loading, Button, Input } from '@/components/ui';
 import { colors, spacing, typography, radius } from '@/lib/theme';
 import { wsManager } from '@/lib/ws';
+import { useConfigStore } from '@/stores/config';
 import {
   getMessages,
   getChatAccounts,
+  getChatUserInfos,
   sendMessage,
   sendImageMessage,
+  sendVideoMessage,
   recallMessage,
   getQuickPhrases,
   createQuickPhrase,
@@ -82,6 +88,7 @@ function isEchoOf(local: ChatMessage, real: ChatMessage): boolean {
     && local.type === real.type
     && local.text === real.text
     // 本地文件 URI 与 CDN URL 无法靠空文本关联，等待明确回执。
+    && local.type !== 'video'
     && (local.type !== 'image' || (local.images.length > 0
       && JSON.stringify(local.images) === JSON.stringify(real.images)))
     && Math.abs(local.time - real.time) < LOCAL_ECHO_WINDOW_MS;
@@ -122,29 +129,153 @@ function mergeMessages(existing: ChatMessage[], incoming: ChatMessage[]): ChatMe
 }
 
 /** 用发送回执精确替换本地占位；回声已到达时只移除该占位。 */
-function applySendReceipt(existing: ChatMessage[], localId: string, receipt: { messageId?: string; imageUrl?: string }): ChatMessage[] {
+function applySendReceipt(existing: ChatMessage[], localId: string, receipt: { messageId?: string; imageUrl?: string; videoUrl?: string; videoCoverUrl?: string }): ChatMessage[] {
   if (!receipt.messageId) return existing;
   const local = existing.find((msg) => msg.messageId === localId);
   if (!local) return existing;
   const rest = existing.filter((msg) => msg.messageId !== localId);
   if (rest.some((msg) => msg.messageId === receipt.messageId)) return rest;
   return [...rest, {
-    ...local, messageId: receipt.messageId, failed: false, failReason: undefined,
+    ...local, messageId: receipt.messageId, sending: false, failed: false, failReason: undefined,
     images: receipt.imageUrl ? [receipt.imageUrl] : local.images,
+    videoUrl: receipt.videoUrl || local.videoUrl,
+    videoCoverUrl: receipt.videoCoverUrl || local.videoCoverUrl,
   }].sort((a, b) => a.time - b.time);
 }
 
 /** 距底部多少像素内仍视为“贴底”，用于决定新消息是否自动滚动 */
 const BOTTOM_THRESHOLD_PX = 80;
+const MAX_VIDEO_BYTES = 20 * 1024 * 1024;
+
+function avatarInitial(name?: string, id?: string): string {
+  return (name || id || '?').trim().charAt(0).toUpperCase() || '?';
+}
+
+function BuyerAvatar({ uri, name, userId, color }: { uri?: string; name?: string; userId?: string; color: string }) {
+  const url = uri?.trim() || '';
+  const source = url.startsWith('//') ? `https:${url}` : url;
+  const [failedUri, setFailedUri] = useState('');
+  return (
+    <View style={[styles.msgAvatar, { backgroundColor: color }]}>
+      {source && source !== failedUri ? (
+        <Image source={{ uri: source }} style={styles.msgAvatar} onError={() => setFailedUri(source)} />
+      ) : (
+        <Text style={styles.msgAvatarText}>{avatarInitial(name, userId)}</Text>
+      )}
+    </View>
+  );
+}
+
+/** 沿用 Web 端已有媒体代理，本地文件不经过服务器。 */
+function chatVideoUrl(uri: string, serverUrl: string | null): string {
+  const url = uri.startsWith('//') ? `https:${uri}` : uri;
+  const base = serverUrl?.replace(/\/+$/, '') || '';
+  if (!base) return url;
+  if (url.startsWith('/api/')) return `${base}${url}`;
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (['dingtalk.cn', 'dingtalk.com'].some((domain) => host === domain || host.endsWith(`.${domain}`))) {
+      return `${base}/api/v1/chat-new/video-proxy?url=${encodeURIComponent(url)}`;
+    }
+    const cdnHosts = ['img.alicdn.com', 'gw.alicdn.com', 'g.alicdn.com', 'img.taobao.com', 'goofish.com',
+      'goofish-prod.oss-cn-hangzhou.aliyuncs.com', 'img01.taobaocdn.com', 'img02.taobaocdn.com',
+      'img03.taobaocdn.com', 'img04.taobaocdn.com', 'img05.taobaocdn.com', 'cbu01.alicdn.com'];
+    if (cdnHosts.some((domain) => host === domain || host.endsWith(`.${domain}`))) {
+      return `${base}/api/v1/chat-new/image-proxy?url=${encodeURIComponent(url)}`;
+    }
+  } catch {
+    // file/content URI 不需要 CDN 代理。
+  }
+  return url;
+}
+
+function videoHtml(uri: string, poster?: string): string {
+  const escape = (value: string) => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;height:100%;background:#000;overflow:hidden}video{width:100%;height:100%;object-fit:contain}</style></head><body><video src="${escape(uri)}"${poster ? ` poster="${escape(poster)}"` : ''} controls playsinline preload="metadata" onerror="window.ReactNativeWebView.postMessage('video-error')"></video></body></html>`;
+}
+
+/** 留在详情模块内，避免 Expo Router 把组件注册为独立页面。 */
+function ChatVideoPlayer({ uri, poster, onLongPress }: { uri: string; poster?: string; onLongPress: () => void }) {
+  const serverUrl = useConfigStore((state) => state.serverUrl);
+  const [open, setOpen] = useState(false);
+  const [playbackFailed, setPlaybackFailed] = useState(false);
+  const [failedPoster, setFailedPoster] = useState('');
+  const videoUrl = chatVideoUrl(uri, serverUrl);
+  const coverUrl = poster ? chatVideoUrl(poster, serverUrl) : '';
+  const localBase = uri.startsWith('file://') ? uri.slice(0, uri.lastIndexOf('/') + 1) : undefined;
+  const source = useMemo(() => ({
+    html: videoHtml(videoUrl, coverUrl),
+    baseUrl: localBase || serverUrl || undefined,
+  }), [videoUrl, coverUrl, localBase, serverUrl]);
+
+  useEffect(() => { setPlaybackFailed(false); }, [videoUrl]);
+
+  return (
+    <>
+      <Pressable
+        style={styles.videoPreview}
+        accessibilityRole="button"
+        accessibilityLabel="播放视频消息"
+        onLongPress={onLongPress}
+        delayLongPress={400}
+        onPress={() => { setPlaybackFailed(false); setOpen(true); }}
+      >
+        {coverUrl && failedPoster !== coverUrl ? (
+          <Image source={{ uri: coverUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" onError={() => setFailedPoster(coverUrl)} />
+        ) : <Video size={36} color="#FFF" />}
+        <View style={styles.videoPlayBadge}>
+          <Play size={18} color="#FFF" />
+          <Text style={styles.videoCaption}>点击播放</Text>
+        </View>
+      </Pressable>
+      <Modal visible={open} animationType="fade" onRequestClose={() => setOpen(false)}>
+        <SafeAreaView style={styles.videoModal}>
+          <Pressable accessibilityLabel="关闭视频" style={styles.videoClose} onPress={() => setOpen(false)}>
+            <X size={28} color="#FFF" />
+          </Pressable>
+          {open && !playbackFailed ? (
+            <WebView
+              key={videoUrl}
+              source={source}
+              style={styles.videoWebView}
+              originWhitelist={['*']}
+              javaScriptEnabled
+              allowsInlineMediaPlayback
+              allowsFullscreenVideo
+              mediaPlaybackRequiresUserAction
+              allowFileAccess={!!localBase}
+              allowFileAccessFromFileURLs={!!localBase}
+              allowingReadAccessToURL={localBase}
+              mixedContentMode="compatibility"
+              onShouldStartLoadWithRequest={(request) => request.url === 'about:blank' || request.url === source.baseUrl || request.url === videoUrl}
+              onError={() => setPlaybackFailed(true)}
+              onHttpError={() => setPlaybackFailed(true)}
+              onMessage={(event) => { if (event.nativeEvent.data === 'video-error') setPlaybackFailed(true); }}
+            />
+          ) : (
+            <View style={styles.videoError}>
+              <Text style={styles.videoCaption}>视频暂时无法播放，请检查网络或视频格式</Text>
+              <Pressable onPress={() => setPlaybackFailed(false)} style={styles.videoClose}>
+                <Text style={styles.videoCaption}>重新加载</Text>
+              </Pressable>
+            </View>
+          )}
+        </SafeAreaView>
+      </Modal>
+    </>
+  );
+}
 
 export default function ChatDetailScreen() {
   const scheme = useColorScheme();
   const c = colors[scheme === 'dark' ? 'dark' : 'light'];
-  const { id, account_id, name, buyer_id } = useLocalSearchParams<{
+  const { id, account_id, name, buyer_id, avatar, raw_cid } = useLocalSearchParams<{
     id: string;
     account_id: string;
     name: string;
     buyer_id: string;
+    avatar?: string;
+    raw_cid?: string;
   }>();
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -158,6 +289,21 @@ export default function ChatDetailScreen() {
   const [showOrders, setShowOrders] = useState(false);
   // 当前会话所属账号的展示名（多账号下用于确认在回复哪个号）
   const [accountLabel, setAccountLabel] = useState('');
+  const [buyerInfo, setBuyerInfo] = useState<{ accountId: string; cid: string; avatar: string; nick: string } | null>(null);
+  const currentBuyer = buyerInfo?.accountId === account_id && buyerInfo.cid === id ? buyerInfo : null;
+  const buyerAvatar = avatar || currentBuyer?.avatar;
+  const buyerName = currentBuyer?.nick || name;
+
+  useEffect(() => {
+    if (!account_id || !id || !buyer_id || (avatar && name && name !== buyer_id && name !== '未知用户')) return;
+    let active = true;
+    getChatUserInfos(account_id, [{ userId: buyer_id, cid: raw_cid || id }]).then((infos) => {
+      if (!active) return;
+      const info = infos[buyer_id];
+      if (info) setBuyerInfo({ accountId: account_id, cid: id, avatar: info.avatar, nick: info.nick });
+    }).catch(() => { /* 资料不可用时继续显示占位，不阻塞聊天。 */ });
+    return () => { active = false; };
+  }, [account_id, id, buyer_id, avatar, name, raw_cid]);
 
   // 快捷短语
   const [phrases, setPhrases] = useState<QuickPhrase[]>([]);
@@ -184,6 +330,17 @@ export default function ChatDetailScreen() {
   const atBottomRef = useRef(true);
   // 首次布局时直接跳到底部，避免长历史从顶部滚动下来的闪动
   const didInitialScrollRef = useRef(false);
+  const videoSendingRef = useRef(false);
+  const videoScopeRef = useRef({ accountId: account_id, cid: id });
+  useEffect(() => {
+    const scope = { accountId: account_id, cid: id };
+    videoScopeRef.current = scope;
+    if (videoSendingRef.current) setSending(false);
+    videoSendingRef.current = false;
+    return () => {
+      if (videoScopeRef.current === scope) videoScopeRef.current = { accountId: '', cid: '' };
+    };
+  }, [account_id, id]);
 
   const loadMessages = useCallback(
     async (append: boolean) => {
@@ -325,13 +482,13 @@ export default function ChatDetailScreen() {
   function markFailed(messageId: string, reason: string) {
     setMessages((prev) =>
       prev.map((m) =>
-        m.messageId === messageId ? { ...m, failed: true, failReason: reason } : m,
+        m.messageId === messageId ? { ...m, sending: false, failed: true, failReason: reason } : m,
       ),
     );
   }
 
   async function handleSend() {
-    if (!inputText.trim() || !account_id || !id || !buyer_id || sending) return;
+    if (!inputText.trim() || !account_id || !id || !buyer_id || sending || videoSendingRef.current) return;
     const text = inputText.trim();
     setInputText('');
     setSending(true);
@@ -362,7 +519,7 @@ export default function ChatDetailScreen() {
   /** 发送一条文本内容（用于快捷短语） */
   async function handleSendPhrase(content: string) {
     const text = content.trim();
-    if (!text || !account_id || !id || !buyer_id || sending) return;
+    if (!text || !account_id || !id || !buyer_id || sending || videoSendingRef.current) return;
     setSending(true);
 
     const optimisticMsg: ChatMessage = {
@@ -390,7 +547,7 @@ export default function ChatDetailScreen() {
 
   /** 选择并发送图片 */
   async function handleImagePick() {
-    if (!account_id || !id || !buyer_id || sending) return;
+    if (!account_id || !id || !buyer_id || sending || videoSendingRef.current) return;
 
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
@@ -425,10 +582,62 @@ export default function ChatDetailScreen() {
     }
   }
 
+  /** 选择并发送视频：先显示本地乐观消息，再等待上传和 IM 回执。 */
+  async function handleVideoPick() {
+    if (!account_id || !id || !buyer_id || sending || videoSendingRef.current) return;
+    const scope = videoScopeRef.current;
+    const isCurrent = () => videoScopeRef.current === scope;
+    videoSendingRef.current = true;
+    setSending(true);
+    let localId: string | undefined;
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!isCurrent()) return;
+      if (!permission.granted) {
+        Alert.alert('需要相册权限', '请在系统设置中允许访问相册后选择视频');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['videos'],
+        allowsEditing: false,
+      });
+      if (!isCurrent() || result.canceled || !result.assets?.length) return;
+      const asset = result.assets[0];
+      if (asset.type !== 'video') throw new Error('请选择视频文件');
+      if (asset.fileSize === 0) throw new Error('视频文件为空');
+      if (asset.fileSize != null && asset.fileSize > MAX_VIDEO_BYTES) throw new Error('视频大小不能超过20MB');
+      localId = `local-video-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const optimisticMsg: ChatMessage = {
+        messageId: localId, senderId: 'self', senderName: '我', isSelf: true,
+        type: 'video', text: '', images: [], videoUrl: asset.uri, time: Date.now(), sending: true,
+      };
+      setMessages((prev) => isCurrent() ? [...prev, optimisticMsg] : prev);
+      const receipt = await sendVideoMessage(
+        scope.accountId,
+        scope.cid,
+        buyer_id,
+        asset.uri,
+        asset.fileName || undefined,
+        asset.mimeType || undefined,
+      );
+      if (isCurrent()) setMessages((prev) => isCurrent() ? applySendReceipt(prev, optimisticMsg.messageId, receipt) : prev);
+    } catch (e) {
+      if (!isCurrent()) return;
+      const reason = e instanceof Error ? e.message : '视频发送失败';
+      if (localId) markFailed(localId, reason);
+      else Alert.alert('无法发送视频', reason);
+    } finally {
+      if (isCurrent()) {
+        videoSendingRef.current = false;
+        setSending(false);
+      }
+    }
+  }
+
   /** 长按自己的消息：弹出撤回操作菜单 */
   function handleMessageLongPress(message: ChatMessage) {
     // 仅自己发送的、非系统、未失败的消息可撤回
-    if (!message.isSelf || message.type === 'system' || message.failed) return;
+    if (!message.isSelf || message.type === 'system' || message.failed || isLocalMessage(message)) return;
     if (Date.now() - message.time >= RECALL_WINDOW_MS) {
       Alert.alert('提示', '该消息已超过 2 分钟，无法撤回');
       return;
@@ -446,7 +655,7 @@ export default function ChatDetailScreen() {
       setMessages((prev) =>
         prev.map((m) =>
           m.messageId === target.messageId
-            ? { ...m, type: 'system', text: '你撤回了一条消息', images: [] }
+            ? { ...m, type: 'system', text: '你撤回了一条消息', images: [], videoUrl: undefined, videoCoverUrl: undefined }
             : m,
         ),
       );
@@ -536,11 +745,7 @@ export default function ChatDetailScreen() {
         delayLongPress={400}
         style={[styles.msgRow, item.isSelf ? styles.msgRowSelf : styles.msgRowOther]}
       >
-        {!item.isSelf && (
-          <View style={[styles.msgAvatar, { backgroundColor: c.primary }]}>
-            <Text style={styles.msgAvatarText}>{(name || '?').charAt(0)}</Text>
-          </View>
-        )}
+        {!item.isSelf && <BuyerAvatar uri={item.senderAvatar || buyerAvatar} name={buyerName || item.senderName} userId={buyer_id || item.senderId} color={c.primary} />}
         <View
           style={[
             styles.msgBubble,
@@ -550,9 +755,9 @@ export default function ChatDetailScreen() {
             },
           ]}
         >
-          {item.type === 'text' && (
+          {(item.type === 'text' || item.type === 'card') && (
             <Text style={[styles.msgText, { color: item.isSelf ? '#FFF' : c.text }]}>
-              {item.text}
+              {item.text || (item.type === 'card' ? '[卡片]' : '')}
             </Text>
           )}
           {item.type === 'image' && item.images.length > 0 && (
@@ -566,6 +771,12 @@ export default function ChatDetailScreen() {
               />
             </TouchableOpacity>
           )}
+          {item.type === 'video' && item.videoUrl && (
+            <ChatVideoPlayer uri={item.videoUrl} poster={item.videoCoverUrl} onLongPress={() => handleMessageLongPress(item)} />
+          )}
+          {item.type === 'video' && !item.videoUrl && (
+            <Text style={[styles.msgText, { color: item.isSelf ? '#FFF' : c.text }]}>{item.text || '[视频暂不可用]'}</Text>
+          )}
           {item.type === 'system' && (
             <Text style={[styles.msgSystem, { color: c.textMuted }]}>{item.text}</Text>
           )}
@@ -574,11 +785,14 @@ export default function ChatDetailScreen() {
               ⚠ {item.failReason || '发送失败'}
             </Text>
           )}
+          {item.type === 'video' && item.isSelf && !item.failed && (
+            <Text style={[styles.msgFailed, { color: '#FFF' }]}>{item.sending ? '视频发送中...' : '已发送'}</Text>
+          )}
         </View>
       </Pressable>
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [id, account_id, name, c.primary, c.surface, c.border, c.text, c.textMuted, c.error, recalling],
+    [id, account_id, buyerName, buyer_id, buyerAvatar, c.primary, c.surface, c.border, c.text, c.textMuted, c.error, recalling],
   );
 
   if (loading) {
@@ -601,8 +815,9 @@ export default function ChatDetailScreen() {
         {/* 聊天头部：买家名 + 所属账号 + 黑名单 */}
         <View style={[styles.chatHeader, { backgroundColor: c.surface, borderBottomColor: c.border }]}>
           <View style={styles.chatHeaderMain}>
+            <BuyerAvatar uri={buyerAvatar} name={buyerName} userId={buyer_id} color={c.primary} />
             <Text style={[styles.chatHeaderName, { color: c.text }]} numberOfLines={1}>
-              {name || '聊天'}
+              {buyerName || '聊天'}
             </Text>
             {/* 多账号下必须能看出当前回复的是哪个账号，否则容易回错号 */}
             {accountLabel ? (
@@ -725,7 +940,7 @@ export default function ChatDetailScreen() {
           </View>
         )}
 
-        <View style={[styles.inputBar, { backgroundColor: c.surface, borderTopColor: c.border }]}>
+        <View style={[styles.actionBar, { backgroundColor: c.surface, borderTopColor: c.border }]}>
           {/* 图片发送按钮 */}
           <Pressable
             onPress={handleImagePick}
@@ -736,6 +951,16 @@ export default function ChatDetailScreen() {
             ]}
           >
             <ImageIcon size={24} color={c.text} />
+          </Pressable>
+
+          {/* 视频发送按钮 */}
+          <Pressable
+            onPress={handleVideoPick}
+            accessibilityLabel="选择并发送视频"
+            disabled={sending}
+            style={({ pressed }) => [styles.iconBtn, { opacity: pressed || sending ? 0.5 : 1 }]}
+          >
+            <Video size={24} color={c.text} />
           </Pressable>
 
           {/* 快捷短语展开/收起 */}
@@ -763,6 +988,8 @@ export default function ChatDetailScreen() {
             <ShoppingBag size={24} color={c.text} />
           </Pressable>
 
+        </View>
+        <View style={[styles.inputBar, { backgroundColor: c.surface, borderTopColor: c.border }]}>
           <TextInput
             value={inputText}
             onChangeText={setInputText}
@@ -966,6 +1193,13 @@ const styles = StyleSheet.create({
   },
   msgText: { ...typography.body },
   msgImage: { width: 200, height: 200, borderRadius: radius.sm },
+  videoPreview: { width: 180, height: 140, borderRadius: radius.sm, overflow: 'hidden', backgroundColor: '#1D2330', alignItems: 'center', justifyContent: 'center' },
+  videoPlayBadge: { position: 'absolute', bottom: 8, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(0,0,0,0.65)', padding: 6, borderRadius: radius.sm },
+  videoCaption: { color: '#FFF', ...typography.caption },
+  videoModal: { flex: 1, backgroundColor: '#000' },
+  videoClose: { alignSelf: 'flex-end', padding: spacing.lg },
+  videoWebView: { flex: 1, backgroundColor: '#000' },
+  videoError: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.lg },
   msgSystem: { ...typography.caption, textAlign: 'center' },
   msgFailed: { ...typography.small, marginTop: spacing.xs },
   // 快捷短语面板
@@ -1008,6 +1242,7 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed',
   },
   // 输入栏
+  actionBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderTopWidth: 1 },
   inputBar: {
     flexDirection: 'row',
     paddingHorizontal: spacing.md,

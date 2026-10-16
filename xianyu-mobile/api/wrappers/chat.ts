@@ -26,10 +26,15 @@ export interface ChatMessage {
   senderId: string;
   senderName: string;
   isSelf: boolean;
-  type: 'text' | 'image' | 'system' | 'card';
+  type: 'text' | 'image' | 'video' | 'system' | 'card';
   text: string;
   images: string[];
+  videoUrl?: string;
+  videoCoverUrl?: string;
+  /** 会话头像透传到消息模型；后端未提供时由页面补齐。 */
+  senderAvatar?: string;
   time: number;
+  sending?: boolean;
   failed?: boolean;
   failReason?: string;
 }
@@ -44,6 +49,11 @@ interface MsgResponse {
   messages: ChatMessage[];
   hasMore: boolean;
   nextCursor: number | null;
+}
+
+export interface ChatUserInfo {
+  avatar: string;
+  nick: string;
 }
 
 export async function getChatAccounts(): Promise<ChatAccount[]> {
@@ -100,6 +110,22 @@ export async function getMessages(
   if ('messages' in data) return data as MsgResponse;
   const wrapped = (data as { success?: boolean; data?: MsgResponse | null }).data;
   return wrapped ?? { messages: [], hasMore: false, nextCursor: null };
+}
+
+/** 批量补齐会话买家头像和昵称；使用 rawCid 保持后端 IM 查询所需的原始会话 ID。 */
+export async function getChatUserInfos(
+  accountId: string,
+  queries: { userId: string; cid: string }[],
+): Promise<Record<string, ChatUserInfo>> {
+  if (queries.length === 0) return {};
+  const client = await getApiClient();
+  const { data, error } = (await (client.POST as any)(
+    `/api/v1/chat-new/avatars/${accountId}`,
+    { body: { queries } },
+  )) as { data?: { success?: boolean; message?: string; data?: Record<string, ChatUserInfo> }; error?: unknown };
+  if (error) throw await extractError(error);
+  if (data?.success === false) throw new Error(data.message || '查询买家资料失败');
+  return data?.data ?? {};
 }
 
 export async function sendMessage(
@@ -219,4 +245,48 @@ export async function sendImageMessage(
   if (error) throw await extractError(error);
   if (!data?.success) throw new Error(data?.message || '图片发送失败');
   return data.data ?? {};
+}
+
+/**
+ * 通过 multipart/form-data 发送视频消息。
+ * 后端会先上传视频到闲鱼 CDN，再发送 IM 消息并返回平台回执。
+ */
+export async function sendVideoMessage(
+  accountId: string,
+  cid: string,
+  toUserId: string,
+  uri: string,
+  fileName?: string,
+  mimeType?: string,
+): Promise<{ messageId?: string; videoUrl?: string; videoCoverUrl?: string }> {
+  const client = await getApiClient();
+  const ext = ((fileName || uri).split(/[?#]/)[0].split('.').pop() || 'mp4').toLowerCase();
+  const safeExt = /^[a-z0-9]+$/.test(ext) ? ext : 'mp4';
+  const filename = fileName || `video.${safeExt}`;
+  const contentType = mimeType?.startsWith('video/') ? mimeType : ({
+    mp4: 'video/mp4',
+    mov: 'video/quicktime',
+    m4v: 'video/x-m4v',
+    webm: 'video/webm',
+    avi: 'video/x-msvideo',
+    mkv: 'video/x-matroska',
+    '3gp': 'video/3gpp',
+  } as Record<string, string>)[safeExt] || 'video/mp4';
+
+  const formData = new FormData();
+  formData.append('cid', cid);
+  formData.append('toUserId', toUserId);
+  formData.append('video', { uri, name: filename, type: contentType } as any);
+
+  const { data, error } = await (client.POST as any)(`/api/v1/chat-new/send-video/${accountId}`, {
+    body: formData,
+    bodySerializer: (body: FormData) => body,
+  });
+  if (error) throw await extractError(error);
+  if (!data?.success) throw new Error(data?.message || '视频发送失败');
+  const receipt = data.data;
+  if (!receipt?.messageId || !receipt?.videoUrl) {
+    throw new Error('未收到有效的视频发送回执，请刷新会话确认后再操作');
+  }
+  return receipt;
 }
