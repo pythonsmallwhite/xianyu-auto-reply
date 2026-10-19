@@ -4,6 +4,9 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const ts = require('../frontend/node_modules/typescript');
 const source = fs.readFileSync(path.join(__dirname, '../frontend/src/pages/chat-new/ChatNew.tsx'), 'utf8');
+const helperSource = fs.readFileSync(path.join(__dirname, '../frontend/src/pages/chat-new/chat_history_merge.ts'), 'utf8')
+  .replace(/^import[^\n]*\n/gm, '')
+  .replace(/export /g, '');
 const tree = ts.createSourceFile('ChatNew.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 let expression;
 let mergeExpression;
@@ -25,9 +28,13 @@ const context = {
   getMessages: () => new Promise((resolve, reject) => pending.push({resolve, reject})),
   setMessages: value => writes.push(value), setMsgHasMore() {}, setMsgCursor() {},
   setLoadingMsgs: value => loading.push(value), addToast: value => errors.push(value),
+  catchUpMessages: async () => {},
+  recoveryRef: {current: {message: () => undefined, generation: () => 0}},
+  msgsCacheRef: {current: {}},
 };
 vm.createContext(context);
 const code = ts.transpileModule(
+  `${helperSource}\nglobalThis.mergeHistoryMessages = mergeMessages;\n` +
   `globalThis.mergeMessages = ${mergeExpression};\nglobalThis.load = ${expression};`,
   {compilerOptions: {target: ts.ScriptTarget.ES2020}},
 ).outputText;

@@ -1054,3 +1054,14 @@
 - 当前停点：检查时 main 基线 d90dd557ef71425051afc604fcd5ea2a883f1655；六项源码已在main工作区合并并验证，15个功能/测试文件已限定暂存，本段交接随功能提交。随后按授权推送 origin/main，必须取得Git回执并核对远端SHA；不得把计划当作已推送。
 - 边界：原有 scripts/build-android-apk.sh、tests/test_android_build.sh、xianyu-mobile/README.md 及其OOM交接差异保留未提交；不纳入依赖、APK或构建产物。所有工作树保留，不删除未提交文件。
 - 下一步：提交推送并复核远端；用户重新打包后在限定测试对象验收上述六项。自动审批超时的命令未计执行成功；原有更广需求的未验证状态保持不变。
+
+### 最新交接：2026-10-20 R30/R31 在线聊天连接修复与 b1724 选择性适配
+
+- R30 来源：用户反馈单个账号持续出现“连接失败: IM连接失败: 2725534360”，删除账号并重新扫码仍失败，并追问失败原因、解决办法和远程接口机制。该数字是账号 ID，旧 manager 吞掉了底层失败阶段；本轮增加安全的阶段化错误提示、注册非 200/超时不再伪成功、Token/device 必须成对缓存、按当前 token 精确失效并最多重取一次。
+- R30 账号生命周期：更新 Cookie、删除账号、扫码 upsert 和批量清 Token 缓存会清理对应 `chat_<unb>` 缓存并断开旧 IM 会话，避免旧 token 或旧 Cookie 客户端复用；账号行/Cookie 变化时 manager 强制重建客户端。密码 upsert 未改动，真实后端原因仍需用户提供脱敏日志才能进一步定位。
+- 远程 Token 配置：全局 `token.api_mode=web|remote`、`token.remote_url`、`token.remote_secret_key`；remote 服务接收完整 Cookie 后返回 token/device_id，本系统仍直连闲鱼 IM。请求使用 `X-API-Key` 和 `{"type":"xianyu_token","data":{"cookies":"..."}}`。测试按钮只验证接口连通，不代表能取得该账号 token；未有可信服务 URL/秘钥时保持 web，不填当前系统 URL，也不记录 Cookie/秘钥。
+- R31 来源：用户指定只审查上游 `b1724f3917200ff916a398eb69741930435ee981`，不合并其余落后提交，并要求 worker 使用 `gpt-6.1-sol`、xhigh、Approve for me。worker `task_3267f6a95df2` 在独立 `codex/chat-upstream-b1724` 完成交付；主协调仅适配聊天历史合并/冻结边界恢复、connected 确认与指数退避、账号/会话作用域隔离，以及后端 WS 的 IM 在线检查 4404，不移植部署扩容、广告推广、自动发货等旁支。
+- R31 当前状态：已实现待提交。新增 `chat_history_merge.ts`、`chat_history_recovery.ts`；重连补拉统一使用多页恢复，后台账号写缓存并保留分页边界；删除旧未使用的一页同步函数。`chat_new_ws.py` 在注册前和 ping 时检查 IM 在线，离线关闭 4404。报告见 `docs/orca/chat-upstream-b1724.md`。
+- 验证：frontend `tsc --noEmit` 和 `npm run build` 通过；Node `test_chat_reconnect_repull.cjs`、`test_chat_message_loading.cjs`、`test_chat_history_recovery.cjs` 通过；Python `tests.test_chat_connection_recovery` 与 `tests.test_chat_new_ws_offline` 共 15 项通过；`git diff --check` 通过。未进行真实账号、浏览器、视频播放或生产数据库验收。
+- 本轮未提交文件（仅本轮范围）：`backend-web/app/api/routes/chat_new_ws.py`、`backend-web/app/api/routes/cookies.py`、`backend-web/app/services/account_service.py`、`backend-web/app/services/chat_new/im_client.py`、`backend-web/app/services/chat_new/im_session_manager.py`、`frontend/src/pages/chat-new/ChatNew.tsx`、`frontend/src/pages/chat-new/useChatNewWs.ts`、`frontend/src/pages/chat-new/chat_history_merge.ts`、`frontend/src/pages/chat-new/chat_history_recovery.ts`、三项聊天 Node 测试、两项聊天 Python 测试、`docs/orca/chat-upstream-b1724.md` 与本段文档。既有 Android 脚本/README、outputs 和其他未提交内容保留，不纳入本轮。
+- 当前停点：审查限定 staged diff 后提交本轮，再按既有授权推送 `origin/main`，核对远端 SHA；用户需要用脱敏日志和真实账号验收线上连接错误是否能显示具体阶段。

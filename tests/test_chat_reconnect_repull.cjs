@@ -16,6 +16,7 @@ const ts = require('../frontend/node_modules/typescript');
 
 const CHAT_NEW = path.join(__dirname, '../frontend/src/pages/chat-new/ChatNew.tsx');
 const WS_HOOK = path.join(__dirname, '../frontend/src/pages/chat-new/useChatNewWs.ts');
+const HISTORY_MERGE = path.join(__dirname, '../frontend/src/pages/chat-new/chat_history_merge.ts');
 
 /** 从 TSX/TS 源文件中按变量名抽取初始化表达式 */
 function extract(source, names) {
@@ -33,8 +34,9 @@ function extract(source, names) {
 }
 
 const chatSource = fs.readFileSync(CHAT_NEW, 'utf8');
-// applySentMessage 依赖 appendMsg → mergeMessages 与 updateConvList，必须一起注入
-const REQUIRED = ['mergeConversations', 'updateConvList', 'mergeMessages', 'appendMsg', 'applySentMessage'];
+// applySentMessage 依赖 appendMsg → mergeMessages 与 updateConvList，必须一起注入。
+// 会话/消息合并已迁移到共享 helper，这里同时加载真实 helper，避免测试落到旧入口。
+const REQUIRED = ['updateConvList', 'mergeMessages', 'appendMsg', 'applySentMessage'];
 const extracted = extract(chatSource, REQUIRED);
 for (const name of REQUIRED) {
   assert.ok(extracted[name], `未在 ChatNew.tsx 中找到 ${name}`);
@@ -57,10 +59,26 @@ function createChatHarness() {
     isPureDigits: (name) => /^\d+$/.test(name),
   };
   vm.createContext(context);
+  const helperSource = fs.readFileSync(HISTORY_MERGE, 'utf8')
+    .replace(/^import[^\n]*\n/gm, '')
+    .replace(/export /g, '');
+  const helperCode = ts.transpileModule(
+    `${helperSource}\n` +
+      'globalThis.mergeHistoryMessages = mergeMessages;\n' +
+      'globalThis.appendHistoryMessage = appendMsg;\n' +
+      'globalThis.mergeHistoryConversations = mergeConversations;\n',
+    { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.None } },
+  ).outputText;
+  vm.runInContext(helperCode, context);
   // 按依赖顺序注入：mergeMessages → appendMsg → applySentMessage
   const code = ts.transpileModule(
-    ['mergeConversations', 'updateConvList', 'mergeMessages', 'appendMsg', 'applySentMessage']
-      .map((name) => `globalThis.${name} = ${extracted[name]};`)
+    [
+      'globalThis.mergeConversations = globalThis.mergeHistoryConversations;',
+      'globalThis.mergeMessages = globalThis.mergeHistoryMessages;',
+      `globalThis.updateConvList = ${extracted.updateConvList};`,
+      `globalThis.appendMsg = ${extracted.appendMsg};`,
+      `globalThis.applySentMessage = ${extracted.applySentMessage};`,
+    ]
       .join('\n'),
     { compilerOptions: { target: ts.ScriptTarget.ES2020 } },
   ).outputText;
@@ -193,7 +211,7 @@ function createChatHarness() {
     // 重连路径必须走 disposeConnection（保留标记），否则重连会被误判成首连而永不补拉
     assert.match(
       wsSource,
-      /const connectAccount = useCallback\(\(aid: string\) => \{\s*disposeConnection\(aid\)/,
+      /const connectAccount = useCallback\(\(aid: string, retryAttempt = 0\) => \{\s*disposeConnection\(aid\)/,
       'connectAccount 不得清除“曾连接”标记，否则重连补拉永远不触发',
     );
     assert.match(

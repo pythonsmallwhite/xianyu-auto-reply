@@ -578,6 +578,8 @@ async def clear_token_cache_batch(
                 if not invalidation.success:
                     raise RuntimeError(invalidation.message)
                 invalidation_messages.append(invalidation.message)
+            from app.services.chat_new.im_session_manager import get_im_session_manager
+            await get_im_session_manager().disconnect(account_id)
             _logger.info(
                 f"[Token缓存失效] 账号 {account_id} 的Token缓存已标记失效 "
                 f"(unb={unb}, 结果={'；'.join(invalidation_messages)})"

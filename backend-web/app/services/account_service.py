@@ -17,7 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from common.services.account_limit_service import AccountLimitService
 from common.models.xy_account import XYAccount
 from common.models.user import User
+from common.models.token_cache import TokenCache
 from common.utils.cookie_refresh import clear_cookie_refresh_snapshot
+from common.utils.xianyu_utils import trans_cookies
+from common.utils.time_utils import get_beijing_now_naive
 
 # UTC时区常量
 UTC = timezone.utc
@@ -350,10 +353,12 @@ class AccountService:
         return account
 
     async def update_cookie(self, account: XYAccount, value: str) -> None:
+        await self._expire_chat_login_cache(account, value)
         account.cookie = value
         account.metadata_json = clear_cookie_refresh_snapshot(account.metadata_json)
         self.session.add(account)
         await self.session.commit()
+        await self._disconnect_chat_client(account.account_id)
 
     async def update_status(self, account: XYAccount, enabled: bool, disable_reason: str | None = None) -> None:
         """更新账号状态
@@ -429,8 +434,10 @@ class AccountService:
         await self.session.commit()
 
     async def delete_account(self, account: XYAccount) -> None:
+        await self._expire_chat_login_cache(account)
         await self.session.delete(account)
         await self.session.commit()
+        await self._disconnect_chat_client(account.account_id)
 
     async def get_account_by_unb(self, owner_id: int, unb: str) -> XYAccount | None:
         stmt = select(XYAccount).where(
@@ -439,6 +446,23 @@ class AccountService:
         )
         result = await self.session.execute(stmt)
         return result.scalars().first()
+
+    async def _expire_chat_login_cache(self, account: XYAccount, new_cookie: str = "") -> None:
+        """Invalidate only this login's chat cache in the account transaction."""
+        users = {str(account.unb or "").strip()}
+        for cookie in (account.cookie or "", new_cookie):
+            users.add(str(trans_cookies(cookie).get("unb") or "").strip())
+        keys = [f"chat_{user}" for user in users if user]
+        if keys:
+            now = get_beijing_now_naive()
+            await self.session.execute(update(TokenCache).where(TokenCache.user_id.in_(keys)).values(
+                token="", device_id="", expire_at=now, renew_expire_at=now, updated_at=now,
+            ))
+
+    @staticmethod
+    async def _disconnect_chat_client(account_id: str) -> None:
+        from app.services.chat_new.im_session_manager import get_im_session_manager
+        await get_im_session_manager().disconnect(account_id)
 
     async def _generate_unique_account_id(self, owner_id: int, base: str) -> str:
         # 全局唯一：account_id 在整个系统内不允许重复，生成候选时不区分 owner_id
@@ -467,6 +491,7 @@ class AccountService:
 
         created = False
         if account:
+            await self._expire_chat_login_cache(account, cookies)
             account.cookie = cookies
             account.metadata_json = clear_cookie_refresh_snapshot(account.metadata_json)
             account.status = "active"
@@ -498,9 +523,12 @@ class AccountService:
             created = True
 
         self.session.add(account)
+        if created:
+            await self._expire_chat_login_cache(account, cookies)
         await self.session.commit()
         if created:
             await self.session.refresh(account)
+        await self._disconnect_chat_client(account.account_id)
         return account, created
 
     async def upsert_account_from_password(

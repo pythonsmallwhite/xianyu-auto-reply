@@ -118,6 +118,9 @@ class GoofishImClient:
         self.token: str = ""
         self.media_host = DEFAULT_MEDIA_HOST
         self._captcha_token_cache_saved = False
+        self.last_connect_error = ""
+        self._token_failure_reason = ""
+        self._registration_token_invalid = False
 
         # WebSocket相关
         self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
@@ -141,16 +144,36 @@ class GoofishImClient:
     # ==================== 连接管理 ====================
 
     async def connect(self) -> bool:
+        """Connect, refreshing a token rejected during registration at most once."""
+        self.last_connect_error = ""
+        for attempt in range(2):
+            self._registration_token_invalid = False
+            if await self._connect_once():
+                return True
+            if not self._registration_token_invalid:
+                return False
+            if not await self._mark_cached_token_expired():
+                self.last_connect_error = "聊天Token已被拒绝，但更新缓存失败，请检查数据库连接"
+                return False
+            if attempt:
+                return False
+            self.token = ""
+        return False
+
+    async def _connect_once(self) -> bool:
         """
         建立连接：获取Token -> 连接WebSocket -> 注册
 
         Returns:
             是否连接成功
         """
+        stage = "获取聊天Token"
+        self._token_failure_reason = ""
         try:
             # 1. 获取IM Token
             self.token = await self._get_im_token()
             if not self.token:
+                self.last_connect_error = self._token_failure_reason or "获取聊天Token失败，请查看Token获取日志"
                 logger.error(f"【{self.account_id}】获取IM Token失败")
                 return False
             logger.info(f"【{self.account_id}】获取IM Token成功")
@@ -171,6 +194,7 @@ class GoofishImClient:
                 "Accept-Encoding": "gzip, deflate, br, zstd",
                 "Accept-Language": "zh-CN,zh;q=0.9",
             }
+            stage = "连接聊天服务器"
             self._session = aiohttp.ClientSession()
             # 超时策略（应对 wss:// 网络抖动）：
             # - total=None:      WebSocket 是长连接，原 total=30 会强制 30 秒后断开整个会话
@@ -196,6 +220,7 @@ class GoofishImClient:
             self._recv_task = asyncio.create_task(self._recv_loop())
 
             # 4. 注册
+            stage = "注册聊天会话"
             await self._register()
             self._registered = True
             logger.info(f"【{self.account_id}】IM注册成功")
@@ -206,9 +231,20 @@ class GoofishImClient:
             # 6. 启动心跳
             self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
+            if not self.is_connected:
+                raise ConnectionError("聊天连接在注册后关闭")
+            self.last_connect_error = ""
             return True
 
         except Exception as e:
+            if isinstance(e, ImRequestRejected):
+                self._registration_token_invalid = e.code in TOKEN_INVALID_LWP_CODES
+                self.last_connect_error = f"{stage}被拒绝（code={e.code}）"
+            elif isinstance(e, (TimeoutError, asyncio.TimeoutError)):
+                self.last_connect_error = f"{stage}超时，请稍后重试"
+            else:
+                # Do not return raw upstream responses, cookies or tokens to the UI.
+                self.last_connect_error = f"{stage}失败（{type(e).__name__}），请查看后端日志"
             logger.error(f"【{self.account_id}】IM连接失败: {e}")
             await self.disconnect()
             return False
@@ -608,7 +644,7 @@ class GoofishImClient:
                 if row:
                     token_val, device_id_val, expire_at = row
                     now = get_beijing_now_naive()
-                    if expire_at and expire_at > now:
+                    if expire_at and expire_at > now and token_val and device_id_val:
                         remaining = expire_at - now
                         hours = int(remaining.total_seconds() // 3600)
                         minutes = int((remaining.total_seconds() % 3600) // 60)
@@ -662,6 +698,8 @@ class GoofishImClient:
         """标记已失效的聊天 Token 缓存，保留历史数据并避免覆盖并发更新。"""
         invalidation = await mark_token_cache_expired(
             token_user_id=self._cache_user_id,
+            expected_token=self.token or None,
+            expected_device_id=self.device_id if self.token else None,
         )
         if invalidation.success:
             logger.info(
@@ -670,6 +708,7 @@ class GoofishImClient:
             )
         else:
             logger.warning(f"【{self.account_id}】{invalidation.message}")
+        return invalidation.success
 
     # ==================== 内部方法 ====================
 
@@ -684,6 +723,7 @@ class GoofishImClient:
             async with token_request_lock(account_identifier):
                 return await self._get_im_token_with_lock()
         except TokenRequestLockError as exc:
+            self._token_failure_reason = "获取聊天Token的锁服务不可用或请求繁忙，请稍后重试"
             logger.error(f"【{self.account_id}】{exc}")
             return ""
 
@@ -699,6 +739,7 @@ class GoofishImClient:
             )
             return cached["token"]
         if not self._last_token_cache_lookup_succeeded:
+            self._token_failure_reason = "读取聊天Token缓存失败，请检查数据库连接"
             logger.error(
                 f"【{self.account_id}】Token缓存复查失败，本次未调用Token接口"
             )
@@ -778,15 +819,18 @@ class GoofishImClient:
                     )
                     return await self._fetch_im_token_from_api(_retry=_retry + 1)
                 else:
+                    self._token_failure_reason = "账号登录凭证已失效，请重新扫码登录"
                     logger.error(f"【{self.account_id}】令牌过期重试已达上限，放弃获取Token")
                     return ""
 
             # 检查是否触发风控滑块验证（如"哎哟喂,被挤爆啦"），委托过滑块后用新Cookie重试
             if self._is_captcha_required(ret_str, result):
                 if _captcha_retry >= CAPTCHA_MAX_RETRY:
+                    self._token_failure_reason = "闲鱼要求安全验证，验证后仍未获取聊天Token，请查看验证日志"
                     logger.error(f"【{self.account_id}】过滑块重试已达上限，放弃获取Token")
                     return ""
                 if not await self._solve_captcha_via_websocket(result):
+                    self._token_failure_reason = "闲鱼要求安全验证，自动验证未完成，请查看验证日志"
                     logger.error(f"【{self.account_id}】过滑块失败，放弃获取Token")
                     return ""
                 logger.warning(
@@ -816,6 +860,7 @@ class GoofishImClient:
             if access_token:
                 self.media_host = normalize_media_host(result.get("data", {}).get("mediaHost"))
             if not access_token:
+                self._token_failure_reason = "Token接口未返回有效聊天Token，请检查获取方式和Token日志"
                 logger.error(
                     f"【{self.account_id}】Token响应异常: "
                     f"{json.dumps(result, ensure_ascii=False)[:300]}"
@@ -823,6 +868,7 @@ class GoofishImClient:
             return access_token
 
         except Exception as e:
+            self._token_failure_reason = f"请求Token接口失败（{type(e).__name__}），请检查网络或接口配置"
             logger.error(f"【{self.account_id}】获取IM Token异常: {e}")
             return ""
 
@@ -962,9 +1008,14 @@ class GoofishImClient:
                 f"body={json.dumps(reg_response.get('body', {}), ensure_ascii=False)[:200]}"
             )
             if reg_code != 200:
-                logger.warning(f"【{self.account_id}】注册返回非200: {reg_code}")
+                raise ImRequestRejected(f"IM注册被拒绝: code={reg_code}", reg_code)
+        except ImRequestRejected:
+            raise
+        except (TimeoutError, asyncio.TimeoutError):
+            raise
         except Exception as e:
-            logger.warning(f"【{self.account_id}】等待注册响应异常: {e}，继续尝试")
+            logger.warning(f"【{self.account_id}】等待注册确认失败: {type(e).__name__}")
+            raise RuntimeError("未收到有效的IM注册确认") from e
 
         # 发送 ackDiff
         current_time = int(time.time() * 1000)
@@ -1022,7 +1073,7 @@ class GoofishImClient:
             result = await asyncio.wait_for(future, timeout=timeout)
             return result
         except asyncio.TimeoutError:
-            raise Exception(f"请求超时: {msg.get('lwp', 'unknown')}")
+            raise TimeoutError(f"请求超时: {msg.get('lwp', 'unknown')}")
         finally:
             self._pending.pop(mid, None)
 
@@ -1049,9 +1100,11 @@ class GoofishImClient:
                 f"标记 Token 缓存过期并重连"
             )
             try:
-                await self._mark_cached_token_expired()
+                if not await self._mark_cached_token_expired():
+                    return False
             except Exception as e:
-                logger.warning(f"【{self.account_id}】标记 Token 缓存过期失败（继续重连）: {e}")
+                logger.warning(f"【{self.account_id}】标记 Token 缓存过期失败: {e}")
+                return False
 
             self.token = ""
             await self.disconnect()

@@ -11,6 +11,7 @@ import { createChatNewWebSocket, type WsPushMessage, type ChatMessage } from '@/
 const HEARTBEAT_INTERVAL = 20000
 /** 重连延迟（毫秒） */
 const RECONNECT_DELAY = 3000
+const MAX_RECONNECT_DELAY = 30000
 
 /** 单个账号的 WebSocket 连接状态 */
 interface WsConnection {
@@ -18,6 +19,7 @@ interface WsConnection {
   heartbeat: ReturnType<typeof setInterval> | null
   reconnect: ReturnType<typeof setTimeout> | null
   closed: boolean
+  retryAttempt: number
 }
 
 interface UseChatNewWsOptions {
@@ -33,6 +35,8 @@ interface UseChatNewWsOptions {
    * 断线期间的推送会永久丢失，调用方必须借此重新拉取会话与消息补齐缺口。
    */
   onReconnected?: (accountId: string) => void
+  /** Subscription confirmation, including the first connection. */
+  onConnected?: (accountId: string, isReconnect: boolean) => void
 }
 
 /**
@@ -41,11 +45,12 @@ interface UseChatNewWsOptions {
  * 根据 accountIds 列表自动管理每个账号的 WebSocket 连接。
  * 新增账号自动建连，移除的账号自动断开，已有账号保持不变。
  */
-export function useChatNewWs({ accountIds, onNewMessage, onDisconnect, onReconnected }: UseChatNewWsOptions) {
+export function useChatNewWs({ accountIds, onNewMessage, onDisconnect, onReconnected, onConnected }: UseChatNewWsOptions) {
   const connectionsRef = useRef<Map<string, WsConnection>>(new Map())
   const onNewMessageRef = useRef(onNewMessage)
   const onDisconnectRef = useRef(onDisconnect)
   const onReconnectedRef = useRef(onReconnected)
+  const onConnectedRef = useRef(onConnected)
   /**
    * 曾经建连成功的账号集合
    *
@@ -59,6 +64,7 @@ export function useChatNewWs({ accountIds, onNewMessage, onDisconnect, onReconne
   useEffect(() => { onNewMessageRef.current = onNewMessage }, [onNewMessage])
   useEffect(() => { onDisconnectRef.current = onDisconnect }, [onDisconnect])
   useEffect(() => { onReconnectedRef.current = onReconnected }, [onReconnected])
+  useEffect(() => { onConnectedRef.current = onConnected }, [onConnected])
 
   /** 清理单个账号的连接（仅关闭底层连接，保留“曾连接”标记） */
   const disposeConnection = useCallback((aid: string) => {
@@ -89,12 +95,13 @@ export function useChatNewWs({ accountIds, onNewMessage, onDisconnect, onReconne
   }, [disposeConnection])
 
   /** 为指定账号建立 WebSocket 连接 */
-  const connectAccount = useCallback((aid: string) => {
+  const connectAccount = useCallback((aid: string, retryAttempt = 0) => {
     disposeConnection(aid)
 
     const ws = createChatNewWebSocket(aid)
-    const conn: WsConnection = { ws, heartbeat: null, reconnect: null, closed: false }
+    const conn: WsConnection = { ws, heartbeat: null, reconnect: null, closed: false, retryAttempt }
     connectionsRef.current.set(aid, conn)
+    let confirmed = false
 
     ws.onopen = () => {
       conn.heartbeat = setInterval(() => {
@@ -102,16 +109,20 @@ export function useChatNewWs({ accountIds, onNewMessage, onDisconnect, onReconne
           ws.send(JSON.stringify({ type: 'ping' }))
         }
       }, HEARTBEAT_INTERVAL)
-      // 断线重连：断连期间推送已丢失，通知调用方补偿拉取
-      const isReconnect = everConnectedRef.current.has(aid)
-      everConnectedRef.current.add(aid)
-      if (isReconnect) onReconnectedRef.current?.(aid)
+      // 等服务端 connected 确认订阅完成后再补偿，避免 TCP 握手成功但 IM 仍离线。
     }
 
     ws.onmessage = (event) => {
       try {
         const data: WsPushMessage = JSON.parse(event.data)
-        if (data.event === 'new_message' && data.cid && data.message) {
+        if (data.event === 'connected' && !confirmed) {
+          confirmed = true
+          const isReconnect = everConnectedRef.current.has(aid)
+          everConnectedRef.current.add(aid)
+          conn.retryAttempt = 0
+          if (isReconnect) onReconnectedRef.current?.(aid)
+          onConnectedRef.current?.(aid, isReconnect)
+        } else if (data.event === 'new_message' && data.cid && data.message) {
           onNewMessageRef.current(aid, data.cid, data.message)
         }
       } catch {
@@ -133,15 +144,15 @@ export function useChatNewWs({ accountIds, onNewMessage, onDisconnect, onReconne
       const isAuthFailure = event.code === 4401 || event.code === 4403
       if (isAuthFailure) {
         conn.closed = true
-        connectionsRef.current.delete(aid)
         everConnectedRef.current.delete(aid)
         return
       }
       // 其他原因断开则自动重连（除非主动关闭）
       if (!conn.closed) {
+        const delay = Math.min(RECONNECT_DELAY * 2 ** conn.retryAttempt, MAX_RECONNECT_DELAY)
         conn.reconnect = setTimeout(() => {
-          if (!conn.closed) connectAccount(aid)
-        }, RECONNECT_DELAY)
+          if (!conn.closed) connectAccount(aid, Math.min(conn.retryAttempt + 1, 4))
+        }, delay)
       }
     }
   }, [disposeConnection])

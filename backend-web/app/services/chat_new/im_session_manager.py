@@ -56,21 +56,24 @@ class ImSessionManager:
             Exception: 连接失败
         """
         async with self._lock:
+            account_context = await self._get_account_context(account_id)
+            if not account_context:
+                old_client = self.clients.pop(account_id, None)
+                if old_client:
+                    await old_client.disconnect()
+                raise ValueError("账号不存在或Cookie为空，请重新扫码登录")
+            account_row_id, cookies_str = account_context
             # 已有连接且仍在线，直接返回
             if account_id in self.clients:
                 client = self.clients[account_id]
-                if client.is_connected:
+                if (client.is_connected and client.account_row_id == account_row_id
+                        and client.cookies_str == cookies_str):
                     return client
                 # 已断开，清理后重建
                 await client.disconnect()
                 del self.clients[account_id]
 
             # 从数据库获取账号行 ID 和 Cookie，供滑块成功后精准持久化。
-            account_context = await self._get_account_context(account_id)
-            if not account_context:
-                raise ValueError(f"账号Cookie为空: {account_id}")
-            account_row_id, cookies_str = account_context
-
             # 创建并连接
             client = GoofishImClient(
                 account_id,
@@ -79,7 +82,7 @@ class ImSessionManager:
             )
             success = await client.connect()
             if not success:
-                raise Exception(f"IM连接失败: {account_id}")
+                raise RuntimeError(client.last_connect_error or "IM连接失败，请查看后端日志")
 
             self.clients[account_id] = client
             # 连接成功后，如果有前端WS客户端在等待，挂载推送回调
