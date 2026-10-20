@@ -198,6 +198,24 @@ class CacheDatabaseTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await db.get(self.Cache, 'chat_other')).token, 'still-valid')
             self.assertEqual((await db.get(self.Cache, 'old')).token, 'still-valid')
 
+    async def test_delete_account_accepts_missing_replacement_and_empty_stored_cookies(self):
+        from types import MethodType
+        load_definitions('common/utils/xianyu_utils.py', {'trans_cookies'}, self.scope)
+        load_definitions(ACCOUNT, {'_expire_chat_login_cache', 'delete_account'}, self.scope, 'AccountService')
+        for unb, cookie in [('old', 'unb=old'), ('old', None), ('old', ''), ('old', '   '), (None, 'unb=old'), (None, None)]:
+            with self.subTest(unb=unb, cookie=cookie):
+                async with self.maker() as db:
+                    account = SimpleNamespace(account_id='test', unb=unb, cookie=cookie)
+                    session = SimpleNamespace(execute=db.execute, commit=AsyncMock(wraps=db.commit), delete=AsyncMock())
+                    service = SimpleNamespace(session=session, _disconnect_chat_client=AsyncMock())
+                    service._expire_chat_login_cache = MethodType(self.scope['_expire_chat_login_cache'], service)
+                    await self.scope['delete_account'](service, account)
+                    session.delete.assert_awaited_once_with(account)
+                    session.commit.assert_awaited_once()
+                    service._disconnect_chat_client.assert_awaited_once_with('test')
+                    self.assertEqual((await db.get(self.Cache, 'chat_other')).token, 'still-valid')
+                    self.assertEqual((await db.get(self.Cache, 'old')).token, 'still-valid')
+
     async def test_rejected_unexpired_token_expires_without_overwriting_replacement(self):
         @dataclass
         class Result:

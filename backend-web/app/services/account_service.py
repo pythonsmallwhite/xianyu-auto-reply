@@ -451,6 +451,10 @@ class AccountService:
         """Invalidate only this login's chat cache in the account transaction."""
         users = {str(account.unb or "").strip()}
         for cookie in (account.cookie or "", new_cookie):
+            # Deletion has no replacement cookie. Empty stored credentials must
+            # not prevent deleting the account or invalidating its known unb.
+            if not cookie or not cookie.strip():
+                continue
             users.add(str(trans_cookies(cookie).get("unb") or "").strip())
         keys = [f"chat_{user}" for user in users if user]
         if keys:

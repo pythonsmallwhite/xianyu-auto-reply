@@ -123,6 +123,15 @@
 
 ## 5. 当前停点与未提交工作
 
+### 最新：2026-10-20 R32 删除账号空 Cookie 回归修复
+
+- 来源：用户反馈删除账号报“服务器内部错误: cookies不能为空”，随后明确本轮只解决无法删除账号。基线 main / 5bb98bd94b0ce5533be8aeffb74eb2cd98401f69；该基线此前已成功推送并通过 ls-remote 核验，下方旧“待推送”停点仅为历史记录。
+- 根因：AccountService.delete_account 调用 _expire_chat_login_cache 时没有替换 Cookie，默认 new_cookie 为空字符串；原循环仍调用 trans_cookies('')，该真实解析函数抛 ValueError，事务尚未执行账号删除。这是此前新增缓存清理的回归，与远程接口配置无关。
+- 修复：仅在缓存清理入口跳过 None、空字符串和纯空白 Cookie；继续使用账号 unb 或有效 Cookie 中的 unb 精确清理聊天缓存，不更改通用 Cookie 解析器、远程配置、重试策略或其他功能。
+- 验证：PYTHONPATH=outputs/r24-test-deps 下运行 py -3.13 -B -m unittest tests.test_chat_connection_recovery tests.test_account_task_stop -q，15 项通过。新用例使用真实 Cookie 解析函数、SQLite 缓存 SQL，覆盖 6 组输入并断言 delete/commit/disconnect 均被调用、他账号及自动回复缓存保持不变；账号删除动作本身使用 mock，真实服务器/MySQL 删除未验收。
+- 提交范围：backend-web/app/services/account_service.py、tests/test_chat_connection_recovery.py 和本段交接，随本轮提交。既有 Android 脚本/测试/README、outputs 及旧交接差异保留未提交。
+- 当前停点：离线验证已通过，准备审查限定差异后提交并按既有授权推送 origin/main；推送后由用户更新 backend-web 部署，再验证问题账号删除。不操作真实账号或服务器。
+
 ### 最新：2026-10-16 Web 发布与列表体验 R24-R29（已实现，离线验证通过）
 
 - 本轮来源：用户在手机端完成后提出六项 Web 需求，并明确继续开发；worker 指定 gpt-6-astra / xhigh / Approve for me，此最新模型要求覆盖历史 gpt-6.1-sol。主协调实际上下文为 approvals_reviewer=auto_review。
