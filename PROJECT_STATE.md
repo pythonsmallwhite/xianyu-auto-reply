@@ -1065,3 +1065,12 @@
 - 验证：frontend `tsc --noEmit` 和 `npm run build` 通过；Node `test_chat_reconnect_repull.cjs`、`test_chat_message_loading.cjs`、`test_chat_history_recovery.cjs` 通过；Python `tests.test_chat_connection_recovery` 与 `tests.test_chat_new_ws_offline` 共 15 项通过；`git diff --check` 通过。未进行真实账号、浏览器、视频播放或生产数据库验收。
 - 本轮未提交文件（仅本轮范围）：`backend-web/app/api/routes/chat_new_ws.py`、`backend-web/app/api/routes/cookies.py`、`backend-web/app/services/account_service.py`、`backend-web/app/services/chat_new/im_client.py`、`backend-web/app/services/chat_new/im_session_manager.py`、`frontend/src/pages/chat-new/ChatNew.tsx`、`frontend/src/pages/chat-new/useChatNewWs.ts`、`frontend/src/pages/chat-new/chat_history_merge.ts`、`frontend/src/pages/chat-new/chat_history_recovery.ts`、三项聊天 Node 测试、两项聊天 Python 测试、`docs/orca/chat-upstream-b1724.md` 与本段文档。既有 Android 脚本/README、outputs 和其他未提交内容保留，不纳入本轮。
 - 当前停点：审查限定 staged diff 后提交本轮，再按既有授权推送 `origin/main`，核对远端 SHA；用户需要用脱敏日志和真实账号验收线上连接错误是否能显示具体阶段。
+
+### 最新交接：2026-10-20 R32 风控滑块失败重试与账号删除/禁用阻塞修复
+
+- 来源：用户提供风控日志截图，账号 `221196236339` 的本机滑块任务连续失败（每条约 10-12 秒），并反馈账号删除不掉、任务一直重试。截图显示调用类型为“本机”；“远程过滑块接口”是当前内部 Token 验证场景名称，不能据此判断已调用外部远程服务。
+- 已确认原因：Token 获取失败被主连接循环归为可恢复的 `failed_captcha`，不会自动禁用账号，原主循环约每 5 秒重试；Cookie 刷新任务对一般失败也会 5 秒后立即重试。禁用旧逻辑在停止 WebSocket 请求失败时回滚数据库状态；删除接口等待停止任务，前端又隐藏具体错误。
+- R32 修改待提交：滑块失败/异常/重试耗尽改为等待 180 秒 Cookie 刷新周期；stop API 单次请求 7 秒且不做 HTTP 重试。禁用停止超时后保留禁用状态并提示；删除停止未确认时仍删除账号并明确提示重启 websocket；前端展示接口返回和真实错误。
+- 验证：`tests.test_account_task_stop` 与 `tests.test_token_retry_policy` 共 4 项通过；`py_compile` 涉及的后端路由/客户端和 WebSocket 服务文件通过；frontend `tsc --noEmit -p tsconfig.json` 通过；`git diff --check` 通过。尚未连接真实服务器或操作真实账号。
+- 用户现场止损：先在风控日志页开启“本机滑块不处理”可停止本机滑块调用并等待 Cookie 刷新周期；更直接的是在账号管理禁用该账号。部署本轮修复后，若删除响应提示“后台任务停止未确认”，重启 websocket 服务清理残留内存任务，再确认账号已删除。
+- 当前停点：审查本轮三项代码差异和交接段后提交，按既有授权推送 `origin/main`，核对远端 SHA；不提交 Android 脚本、README、outputs 等既有未提交文件。

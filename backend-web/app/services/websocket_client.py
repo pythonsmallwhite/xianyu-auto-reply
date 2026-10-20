@@ -67,7 +67,9 @@ class WebSocketServiceClient:
         """
         url = f"{self.base_url}/internal/accounts/{account_id}/stop"
         try:
-            response = await self.http_client.post(url)
+            # Stop is idempotent. Do not let shared HTTP retries make account
+            # disable/delete wait through repeated browser-task timeouts.
+            response = await self.http_client.post(url, timeout=7, max_retries=1)
             return response
         except Exception as e:
             logger.error(f"停止账号任务失败: {account_id}, 错误: {e}")

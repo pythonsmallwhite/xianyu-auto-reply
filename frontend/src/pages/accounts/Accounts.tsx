@@ -817,7 +817,7 @@ export function Accounts() {
         addToast({ type: 'error', message: result.message || '操作失败' })
         return
       }
-      addToast({ type: 'success', message: account.enabled ? '账号已禁用' : '账号已启用' })
+      addToast({ type: 'success', message: result.message || (account.enabled ? '账号已禁用' : '账号已启用') })
       await loadAccounts()
     } catch (error) {
       addToast({ type: 'error', message: getApiErrorMessage(error, '操作失败') })
@@ -1043,12 +1043,12 @@ export function Accounts() {
   const handleDelete = async (id: string) => {
     setDeleting(true)
     try {
-      await deleteAccount(id)
-      addToast({ type: 'success', message: '删除成功' })
+      const result = await deleteAccount(id)
+      addToast({ type: 'success', message: result.message || '删除成功' })
       setDeleteAccountConfirm({ open: false, id: null })
       loadAccounts()
-    } catch {
-      addToast({ type: 'error', message: '删除失败' })
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '删除失败') })
     } finally {
       setDeleting(false)
     }

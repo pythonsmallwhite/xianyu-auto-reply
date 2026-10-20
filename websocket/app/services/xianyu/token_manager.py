@@ -11,6 +11,8 @@ import asyncio
 import time
 from loguru import logger
 
+from common.utils.token_retry_policy import COOKIE_REFRESH_DEFER_STATUSES
+
 
 class TokenManager:
     """Token管理器"""
@@ -134,13 +136,7 @@ class TokenManager:
                 if new_token:
                     self.last_cookie_refresh_time = current_time
                     logger.info(f"【{self.cookie_id}】Cookie刷新任务完成,Token已更新")
-                elif getattr(self.xianyu, "last_token_refresh_status", "") in (
-                    "skipped_local_slider_disabled",
-                    "skipped_local_slider_config_unavailable",
-                    "skipped_risk_control_processing",
-                    "skipped_risk_control_check_failed",
-                    "skipped_startup_cache_lookup_failed",
-                ):
+                elif getattr(self.xianyu, "last_token_refresh_status", "") in COOKIE_REFRESH_DEFER_STATUSES:
                     self.last_cookie_refresh_time = time.time()
                     refresh_status = self.xianyu.last_token_refresh_status
                     if refresh_status == "skipped_local_slider_disabled":

@@ -22,6 +22,7 @@ from common.utils.xianyu_utils import (
 )
 from common.utils.time_utils import get_beijing_now_naive
 from common.utils.text_utils import safe_str
+from common.utils.token_retry_policy import token_failure_retry_delay
 from app.services.xianyu.connection_manager import ConnectionManager, ConnectionState
 from app.services.xianyu.token_manager import TokenManager
 
@@ -2478,20 +2479,12 @@ class XianyuAsync:
                             #   上次登录间隔 300 秒未到），每 5 秒重试无意义且会刷屏日志、
                             #   占用 token API 配额。
                             # - 本机滑块不处理且接口最终仍需滑块：等待 Cookie 刷新的 3 分钟轮询周期。
-                            # - 其他场景（滑块、网络故障、API 业务失败）：保持 5 秒快速重试，
-                            #   避免延误账号恢复。
-                            if refresh_status == 'skipped_cooldown':
-                                sleep_duration = 300
-                            elif refresh_status in (
-                                'skipped_local_slider_disabled',
-                                'skipped_local_slider_config_unavailable',
-                                'skipped_risk_control_processing',
-                                'skipped_risk_control_check_failed',
-                                'skipped_startup_cache_lookup_failed',
-                            ):
-                                sleep_duration = self.token_manager.cookie_refresh_interval
-                            else:
-                                sleep_duration = 5
+                            # - 滑块失败等待 Cookie 刷新周期，避免用同一凭证反复触发风控。
+                            # - 其他网络/API失败仍保持短重试，避免延误账号恢复。
+                            sleep_duration = token_failure_retry_delay(
+                                refresh_status,
+                                self.token_manager.cookie_refresh_interval,
+                            )
                             await self._interruptible_sleep(sleep_duration)
                             continue
                     else:

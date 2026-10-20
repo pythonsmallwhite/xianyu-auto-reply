@@ -10,6 +10,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, UploadFile, File, Form, status
 from sqlalchemy import func, select, text
 
@@ -360,6 +362,23 @@ async def _get_account_or_404(
     return account
 
 
+async def _request_stop_account_task(websocket_client, account_id: str) -> tuple[bool, str | None]:
+    """Request task cancellation without letting a stuck browser block account operations."""
+    try:
+        result = await asyncio.wait_for(
+            websocket_client.stop_account(account_id),
+            timeout=8,
+        )
+    except asyncio.TimeoutError:
+        return False, "后台任务停止请求超时"
+    except Exception as exc:
+        return False, f"后台任务停止请求异常: {type(exc).__name__}"
+
+    if isinstance(result, dict) and not result.get("success", True):
+        return False, str(result.get("message") or "后台任务停止请求失败")
+    return True, None
+
+
 async def _update_account_status_and_task(
     account: XYAccount,
     enabled: bool,
@@ -377,23 +396,21 @@ async def _update_account_status_and_task(
     )
 
     if enabled:
-        task_result = await websocket_client.start_account(account.account_id, account.cookie or "", account.owner_id)
-    else:
-        task_result = await websocket_client.stop_account(account.account_id)
+        try:
+            task_result = await websocket_client.start_account(account.account_id, account.cookie or "", account.owner_id)
+        except Exception as exc:
+            task_result = {"success": False, "message": f"后台任务启动异常: {type(exc).__name__}"}
+        if isinstance(task_result, dict) and not task_result.get("success", True):
+            await account_service.update_status(account, current_enabled, original_disable_reason)
+            return False, str(task_result.get("message") or "账号任务启动失败")
+        return True, None
 
-    task_success = True
-    task_message = None
-    if isinstance(task_result, dict):
-        task_success = bool(task_result.get("success", True))
-        task_message = task_result.get("message")
-
-    if not task_success:
-        await account_service.update_status(account, current_enabled, original_disable_reason)
-        return False, task_message or ("账号任务启动失败" if enabled else "账号任务停止失败")
+    stop_confirmed, stop_message = await _request_stop_account_task(websocket_client, account.account_id)
+    if not stop_confirmed:
+        # Keep the persisted disabled state so polling cannot start another token/captcha attempt.
+        return True, f"账号已禁用，但后台任务停止未确认：{stop_message or '请重启 websocket 服务'}"
 
     return True, None
-
-
 @router.post("", response_model=ApiResponse)
 async def create_account(
     payload: AccountCreate,
@@ -444,7 +461,7 @@ async def update_account_status(
     success, error_message = await _update_account_status_and_task(account, payload.enabled, account_service)
     if not success:
         return ApiResponse(success=False, message=error_message or "账号状态更新失败")
-    return ApiResponse(success=True, message="账号状态已更新")
+    return ApiResponse(success=True, message=error_message or "账号状态已更新")
 
 
 @router.put("/status/batch", response_model=ApiResponse)
@@ -789,11 +806,22 @@ async def delete_account(
 ) -> ApiResponse:
     account = await _get_account_or_404(current_user, account_id, account_service)
     
-    # 先停止WebSocket任务（通过HTTP调用WebSocket服务）
+    # 先尽力停止 WebSocket 任务，但不能让失联/卡住的任务阻断账号删除。
     from app.services.websocket_client import websocket_client
-    await websocket_client.stop_account(account_id)
+    stop_confirmed, stop_message = await _request_stop_account_task(websocket_client, account_id)
+    stop_warning = "" if stop_confirmed else (stop_message or "后台任务停止未确认")
+
+    if stop_warning:
+        from loguru import logger
+        logger.warning(f"删除账号 {account_id} 时未能确认 WebSocket 任务已停止: {stop_warning}")
     
     await account_service.delete_account(account)
+    if stop_warning:
+        return ApiResponse(
+            success=True,
+            message="账号已删除，但后台任务停止未确认，请重启 websocket 服务",
+            data={"stop_warning": stop_warning},
+        )
     return ApiResponse(success=True, message="账号已删除")
 
 
