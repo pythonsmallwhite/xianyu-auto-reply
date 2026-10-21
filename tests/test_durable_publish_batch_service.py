@@ -670,6 +670,8 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
             batch = await self.create(str(hours), account_ids=["acct", "a0", "a1", "a2", "a3"], material_ids=(11, 12), window_hours=hours)
             targets = [t for t in await self.rows(self.Target) if t.batch_id == batch.id]
             self.assertEqual(batch.deadline_at - batch.window_started_at, timedelta(hours=hours))
+            self.assertEqual(targets[0].scheduled_at, batch.window_started_at)
+            self.assertEqual(targets[0].available_at, batch.window_started_at)
             for mid in (11, 12):
                 group = [t for t in targets if t.material_id == mid]
                 self.assertEqual(len({t.internal_product_id for t in group}), 1)
@@ -679,8 +681,45 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(all(batch.window_started_at <= t.scheduled_at <= batch.deadline_at for t in group))
         self.assertEqual(len(await self.rows(self.Product)), 2)
         self.assertEqual(len(await self.rows(self.Schedule)), 2)
-        self.assertIsNone(await self.Service.find_next_batch())
+        self.assertEqual(await self.Service.find_next_batch(), "1")
         self.execute.assert_not_awaited()
+
+    async def test_new_batch_only_first_target_is_due_and_remaining_random_slots_are_unchanged(self):
+        import random
+        from common.utils.batch_schedule import plan_product_offsets
+        async with self.maker() as session:
+            session.add(self.XYAccount(owner_id=7, account_id="second", cookie="offline", login_method="cookie"))
+            await session.commit()
+        for hours in (1, 3, 5, 12, 24):
+            with self.subTest(hours=hours):
+                offsets = plan_product_offsets(2, hours, random.Random(42))
+                self.offsets.side_effect = lambda n, t: offsets
+                mids = (hours * 100 + 12, hours * 100 + 11)
+                batch = await self.create(str(hours), account_ids=["second", "acct"], material_ids=mids, window_hours=hours)
+                targets = [t for t in await self.rows(self.Target) if t.batch_id == batch.id]
+                self.assertEqual((targets[0].account_id, targets[0].material_id), ("second", mids[0]))
+                expected = [self.now] + [self.now + timedelta(seconds=offset) for offset in (offsets[0], offsets[1], offsets[1])]
+                self.assertEqual([t.scheduled_at for t in targets], expected)
+                self.assertEqual([t.available_at for t in targets], expected)
+                self.assertEqual(sum(t.available_at <= self.now for t in targets), 1)
+                # Idempotent submission / worker recovery must preserve the plan.
+                await self.create(str(hours), account_ids=["second", "acct"], material_ids=mids, window_hours=hours)
+                self.assertEqual(await self.Service.recover_interrupted_targets(), 0)
+                stored = [t for t in await self.rows(self.Target) if t.batch_id == batch.id]
+                self.assertEqual([t.scheduled_at for t in stored], expected)
+                claimed = await self.Service._claim_next_target(batch.id)
+                self.assertEqual(claimed["target_id"], targets[0].id)
+                async with self.Service._request_guard(claimed):
+                    pass
+                self.assertIsNone(await self.Service._claim_next_target(batch.id))
+
+    async def test_single_task_in_hour_window_is_due_now(self):
+        self.offsets.side_effect = lambda n, t: (t * 1800,)
+        batch = await self.create(window_hours=24)
+        target, = await self.rows(self.Target)
+        self.assertEqual((target.scheduled_at, target.available_at), (self.now, self.now))
+        self.assertEqual(target.deadline_at, batch.window_started_at + timedelta(hours=24))
+        self.assertEqual(await self.Service.find_next_batch(), batch.id)
 
     def test_api_window_schema_requires_explicit_supported_value(self):
         import ast
@@ -930,11 +969,17 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_future_plan_is_not_claimed_and_guard_rechecks_it(self):
         self.offsets.side_effect = lambda n, t: (300,) * n
-        await self.create()
+        await self.create(material_ids=(11, 12))
+        # The first batch target is now immediate; the second product keeps its
+        # original future slot and must still be protected by the guard.
+        self.assertEqual(await self.Service.find_next_batch(), "batch-1")
+        claimed_first = await self.Service._claim_next_target("batch-1")
+        self.assertIsNotNone(claimed_first)
         self.assertIsNone(await self.Service.find_next_batch())
         self.assertIsNone(await self.Service._claim_next_target("batch-1"))
         self.now += timedelta(seconds=300)
         claimed = await self.Service._claim_next_target("batch-1")
+        self.assertIsNotNone(claimed)
         async with self.maker() as session:
             target = await session.get(self.Target, claimed["target_id"])
             target.scheduled_at = self.now + timedelta(seconds=30)
@@ -943,8 +988,8 @@ class DurablePublishBatchTests(unittest.IsolatedAsyncioTestCase):
             async with self.Service._request_guard(claimed):
                 self.fail("计划之前不得发布")
         self.assertEqual(caught.exception.retry_at, self.now + timedelta(seconds=30))
-        self.assertIsNone((await self.rows(self.Target))[0].request_started_at)
-        self.assertEqual((await self.rows(self.Log))[0].status, "pending")
+        self.assertIsNone(next(t for t in await self.rows(self.Target) if t.id == claimed["target_id"]).request_started_at)
+        self.assertTrue(all(log.status == "pending" for log in await self.rows(self.Log)))
 
     async def test_guard_exit_releases_lease_after_exception_and_blocks_duplicate(self):
         await self.create()

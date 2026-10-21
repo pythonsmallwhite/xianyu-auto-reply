@@ -220,6 +220,11 @@ class DurablePublishBatchService:
             window_started_at=window_started_at,
             deadline_at=deadline_at,
         )
+        # Only the first target of a new batch is due immediately. Moving it
+        # earlier preserves every other random slot and the per-product gaps.
+        # Request-time guards still enforce leases and cross-batch spacing.
+        targets[0].scheduled_at = window_started_at
+        targets[0].available_at = window_started_at
         await self.session.commit()
         return batch
 

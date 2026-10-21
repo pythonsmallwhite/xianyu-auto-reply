@@ -716,6 +716,7 @@ function BatchPublishContent({ userId }: { userId: number }) {
         <div className="vben-card-header"><h2 className="vben-card-title">发布窗口</h2></div>
         <div className="vben-card-body">
           <p className="text-xs text-slate-500 mb-2">必须选择窗口，不预选默认值。立即发布仅限恰好选择一个账号；切换为多账号后需重新选择窗口。</p>
+          <p className="text-xs text-slate-500 mb-2">选择小时窗口后，整个批次的第一个任务立即开始，其余任务在窗口内随机发布；同一商品仍遵守最小发布间隔。</p>
           <div className="flex flex-wrap gap-2">
             {([0, ...PUBLISH_WINDOWS] as PublishWindowHours[]).map(hours => (
               <button type="button" key={hours} onClick={() => setWindowHours(hours)}
